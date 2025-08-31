@@ -1,5 +1,5 @@
 """
-Hybrid Cryptographic System for QuantumFortress 2.0
+QuantumFortress 2.0 Hybrid Cryptographic System
 
 This module implements the hybrid cryptographic system that enables seamless migration
 from classical to post-quantum algorithms while maintaining full backward compatibility.
@@ -21,21 +21,22 @@ This implementation extends those principles to a hybrid cryptographic framework
 provides a practical path to post-quantum security.
 """
 
-import time
 import numpy as np
+import time
+import uuid
 from enum import Enum
-from typing import Dict, Any, Tuple, Optional, List, Union
+from typing import Dict, Any, Tuple, List, Optional, Union
 from dataclasses import dataclass
 
-from quantum_fortress.core.adaptive_hypercube import AdaptiveQuantumHypercube
-from quantum_fortress.core.metrics import TopologicalMetrics, TVIResult
-from quantum_fortress.topology.homology import HomologyAnalyzer
-from quantum_fortress.crypto.quantum_sig import QuantumSignature
-from quantum_fortress.utils.crypto_utils import (
+# Import core components
+from .adaptive_hypercube import AdaptiveQuantumHypercube
+from ..topology.homology import HomologyAnalyzer, TopologicalMetrics
+from ..utils.crypto_utils import (
     ecdsa_sign,
     ecdsa_verify,
     generate_ecdsa_keys,
-    hash_message
+    hash_message,
+    transform_to_ur_uz
 )
 
 # Configure module logger
@@ -49,6 +50,16 @@ TVI_CRITICAL_THRESHOLD = 0.8  # Threshold for critical vulnerability
 MIGRATION_PHASES = 3  # Total number of migration phases
 DEFAULT_BASE_DIMENSION = 4
 MIN_SIGNATURES_FOR_ANALYSIS = 100  # Minimum signatures for reliable TVI calculation
+N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141  # secp256k1.n
+
+
+@dataclass
+class TVIResult:
+    """Result of Topological Vulnerability Index analysis"""
+    tvi: float
+    is_secure: bool
+    vulnerability_type: str
+    explanation: str
 
 
 class MigrationPhase(Enum):
@@ -126,6 +137,10 @@ class HybridCryptoSystem:
             base_dimension: Base dimension for the quantum hypercube
             hypercube: Optional pre-configured quantum hypercube
         """
+        # Validate dimension
+        if base_dimension < 4 or base_dimension > 8:
+            raise ValueError("Base dimension must be between 4 and 8")
+            
         self.base_dimension = base_dimension
         self.hypercube = hypercube or AdaptiveQuantumHypercube(dimension=base_dimension)
         self.topology_analyzer = HomologyAnalyzer(dimension=base_dimension)
@@ -155,7 +170,6 @@ class HybridCryptoSystem:
             "Плагин для Bitcoin Core: Автоматически проверяет входящие транзакции 
             на наличие слабых подписей, Блокирует транзакции с TVI > 0.5."
         """
-        import uuid
         key_id = str(uuid.uuid4())
         creation_time = time.time()
         
@@ -178,7 +192,7 @@ class HybridCryptoSystem:
             },
             quantum=quantum_keys,
             migration_phase=current_phase.value,
-            tvi_threshold=TVI_SECURE_THRESHOLD,
+            tvi_threshold=self.get_tvi_threshold(),
             key_id=key_id,
             creation_time=creation_time,
             last_usage=creation_time
@@ -279,7 +293,6 @@ class HybridCryptoSystem:
         Example from Ur Uz работа.md:
             "Works as API wrapper (no core modifications needed)"
         """
-        import uuid
         signature_id = str(uuid.uuid4())
         timestamp = time.time()
         
@@ -397,8 +410,10 @@ class HybridCryptoSystem:
                 logger.warning("Quantum signature verification failed")
         
         # Check TVI security threshold
-        if signature.tvi > TVI_SECURE_THRESHOLD:
-            logger.warning(f"Signature rejected due to high TVI ({signature.tvi:.4f} > {TVI_SECURE_THRESHOLD})")
+        if signature.tvi > self.get_tvi_threshold():
+            logger.warning(
+                f"Signature rejected due to high TVI ({signature.tvi:.4f} > {self.get_tvi_threshold():.4f})"
+            )
             return False
         
         # All checks passed
@@ -465,8 +480,8 @@ class HybridCryptoSystem:
             z = hash_message(message)
             
             # Transform to (u_r, u_z) space as in Ur Uz работа.md
-            u_r = (r * pow(s, -1, self.hypercube.dimension)) % 1.0
-            u_z = (z * pow(s, -1, self.hypercube.dimension)) % 1.0
+            u_r = (r * pow(s, -1, N)) % 1.0
+            u_z = (z * pow(s, -1, N)) % 1.0
             
             # Analyze topology
             topology_metrics = self.topology_analyzer.analyze([(u_r, u_z)])
@@ -510,7 +525,7 @@ class HybridCryptoSystem:
             return "none"
         
         # Check for specific vulnerability patterns
-        if abs(metrics.betti_numbers[1] - self.base_dimension) > 0.5:
+        if len(metrics.betti_numbers) > 1 and abs(metrics.betti_numbers[1] - self.base_dimension) > 0.5:
             return "topological_structure"
             
         if metrics.topological_entropy < 0.6 * np.log(self.base_dimension):
@@ -547,11 +562,11 @@ class HybridCryptoSystem:
                 "This indicates patterns that could be exploited to predict future signatures."
             ),
             "manifold_distortion": (
-                f"Manifold distortion detected (Euler characteristic = {metrics.euler_characteristic}). "
+                f"Manifold distortion detected (Euler characteristic = {metrics.euler_characteristic:.4f}). "
                 "The signature space does not maintain the expected topological properties."
             ),
             "unknown": (
-                f"Security vulnerability detected (TVI = {metrics.tvi:.4f} > {TVI_SECURE_THRESHOLD}). "
+                f"Security vulnerability detected (TVI = {metrics.tvi:.4f} > {TVI_SECURE_THRESHOLD:.4f}). "
                 "Further analysis required to determine specific vulnerability type."
             )
         }
@@ -636,7 +651,7 @@ class HybridCryptoSystem:
         
         return MigrationStatus(
             current_phase=self.migration_phase,
-            tvi_threshold=TVI_SECURE_THRESHOLD,
+            tvi_threshold=self.get_tvi_threshold(),
             signatures_analyzed=self.signatures_analyzed,
             secure_wallets=self.secure_wallets,
             vulnerable_wallets=self.vulnerable_wallets,
@@ -714,7 +729,7 @@ class HybridCryptoSystem:
         # Block transaction if TVI is too high
         if tvi_result.tvi > TVI_SECURE_THRESHOLD:
             logger.warning(
-                f"Blocked transaction with high TVI ({tvi_result.tvi:.4f} > {TVI_SECURE_THRESHOLD})"
+                f"Blocked transaction with high TVI ({tvi_result.tvi:.4f} > {TVI_SECURE_THRESHOLD:.4f})"
             )
             return {
                 "status": "rejected",
