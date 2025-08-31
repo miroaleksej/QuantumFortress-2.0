@@ -2,6 +2,7 @@
 
 <img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/f527b173-f0c0-4e80-b0f8-bcf37990b75a" />
 
+![Visitors](https://api.visitorbadge.io/api/visitors?path=https://github.com/yourrepo&label=Visitors&countColor=%23263759)
 
 [Why Your Crypto Wallet Is Not As Secure As You Think](https://github.com/miroaleksej/isogenyguard-sdk/blob/main/Why%20Your%20Crypto%20Wallet%20Is%20Not%20As%20Secure%20As%20You%20Think.md)
 
