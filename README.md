@@ -3,6 +3,10 @@
 <img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/f527b173-f0c0-4e80-b0f8-bcf37990b75a" />
 
 
+[Why Your Crypto Wallet Is Not As Secure As You Think](https://github.com/miroaleksej/isogenyguard-sdk/blob/main/Why%20Your%20Crypto%20Wallet%20Is%20Not%20As%20Secure%20As%20You%20Think.md)
+
+# Programming work is in progress, and the system is not complete!
+
 ## 🌌 Revolutionizing Blockchain Security Through Quantum Topology
 
 QuantumFortress 2.0 is not just another blockchain—it's a paradigm shift in cryptographic security. Built on the revolutionary concept of "an impregnable fortress in a multidimensional hypercube," this post-quantum blockchain leverages quantum topology as its fundamental security foundation rather than as an add-on feature. #QuantumRevolution #BlockchainEvolution #PostQuantumSecurity
