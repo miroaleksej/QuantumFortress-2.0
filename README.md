@@ -1,6 +1,7 @@
 # QuantumFortress 2.0: The Next Generation Post-Quantum Blockchain with Topological Security
 
-![QuantumFortress Architecture](https://via.placeholder.com/800x400.png?text=QuantumFortress+2.0+Architecture)
+<img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/f527b173-f0c0-4e80-b0f8-bcf37990b75a" />
+
 
 ## 🌌 Revolutionizing Blockchain Security Through Quantum Topology
 
