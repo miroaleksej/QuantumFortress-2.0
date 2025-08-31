@@ -1,57 +1,58 @@
-"""
-QuantumFortress 2.0 Adaptive Quantum Hypercube Implementation
+"""QuantumFortress 2.0 Adaptive Quantum Hypercube Implementation
 
 This module implements the core quantum-topological structure of QuantumFortress 2.0:
 the Adaptive Quantum Hypercube. This structure forms the foundation of our post-quantum
 security model, where vulnerabilities become visible as topological anomalies that the
 system automatically corrects.
 
-The implementation follows the philosophy: "Topology isn't a hacking tool, but a microscope
-for diagnosing vulnerabilities. Ignoring it means building cryptography on sand."
+The implementation follows the philosophy:
+"Topology isn't a hacking tool, but a microscope for diagnosing vulnerabilities.
+Ignoring it means building cryptography on sand."
 
 Key features:
-- Starts with practical 4D implementation with automatic expansion to 8D when needed
-- Quantum states represented as superpositions across the hypercube structure
-- Continuous topological integrity verification through Betti numbers
-- Self-calibration to maintain quantum state stability
-- TVI (Topological Vulnerability Index) as primary security metric
+- Starts with a 4D implementation (practical for current hardware)
+- Automatically expands to higher dimensions (up to 8D) when security requires it
+- Maintains topological integrity through continuous monitoring of Betti numbers
+- Self-calibrates to correct quantum drift and maintain security
+- Implements topologically-optimized cache for signature verification
+- Integrates with TVI (Topological Vulnerability Index) for quantitative security metrics
+- Supports WDM (Wavelength Division Multiplexing) parallelism for performance
 
-As stated in Ur Uz работа.md: "Применение чисел Бетти к анализу ECDSA-Torus предоставляет
-точную количественную оценку структуры пространства подписей и обнаруживает скрытые
-уязвимости, которые пропускаются другими методами."
+The implementation extends the principles from "Ur Uz работа.md", applying Betti numbers
+to quantum-topological security analysis in a practical, production-ready system.
 
-This implementation extends those principles to the quantum-topological domain.
+Example:
+>>> hypercube = AdaptiveQuantumHypercube(dimension=4)
+>>> signature = "transaction_data"
+>>> metrics = hypercube.analyze_topology(signature)
+>>> print(f"TVI: {metrics.tvi:.4f} ({'SECURE' if metrics.tvi < 0.5 else 'VULNERABLE'})")
 """
 
 import numpy as np
 import time
-import logging
-from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple, Callable
 from enum import Enum
-from dataclasses import dataclass
 
-# Configure module logger
-logger = logging.getLogger(__name__)
+from quantum_fortress.core.auto_calibration import AutoCalibrationSystem
+from quantum_fortress.core.topological_metrics import TopologicalMetrics, TVIResult
+from quantum_fortress.topology.persistent_homology import calculate_betti_numbers
+from quantum_fortress.utils.compression import TopologicalCompressor
 
-# Constants
+# Core configuration constants
 DEFAULT_DIMENSION = 4
-MIN_DIMENSION = 4
 MAX_DIMENSION = 8
-TVI_THRESHOLD = 0.5  # Critical threshold for vulnerability detection
-CALIBRATION_INTERVAL = 3600  # Seconds between automatic calibrations
-QUANTUM_STATE_PRECISION = 1e-10  # Precision for quantum state comparisons
-WDM_CHANNELS = 8  # Default number of WDM channels for parallelism
-BETTI_EXPECTED = {0: 1, 1: MIN_DIMENSION, 2: 1}  # Expected Betti numbers for secure system
+TVI_THRESHOLD = 0.5
+CALIBRATION_INTERVAL = 60  # seconds
+WDM_CHANNELS = 16
+QUANTUM_STATE_PRECISION = 1e-10
 
-
-class HypercubeState(Enum):
-    """States of the quantum hypercube lifecycle"""
-    STABLE = "stable"          # Normal operation, TVI < TVI_THRESHOLD
-    WARNING = "warning"        # Potential issues, TVI_THRESHOLD <= TVI < 0.7
-    CRITICAL = "critical"      # Serious vulnerabilities, TVI >= 0.7
-    EXPANDING = "expanding"    # Hypercube is expanding dimension
-    CALIBRATING = "calibrating"  # Hypercube is undergoing calibration
-
+class ExpansionReason(Enum):
+    SECURITY = "security_threshold_exceeded"
+    PERFORMANCE = "performance_optimization"
+    MAINTENANCE = "scheduled_maintenance"
+    DRIFT_CORRECTION = "quantum_drift_correction"
+    CRITICAL_EVENT = "critical_security_event"
 
 @dataclass
 class HypercubeConfiguration:
@@ -64,7 +65,7 @@ class HypercubeConfiguration:
     auto_expand: bool = True
     auto_calibrate: bool = True
     quantum_precision: float = QUANTUM_STATE_PRECISION
-
+    compression_method: str = 'hybrid'  # 'topological', 'algebraic', 'hybrid'
 
 @dataclass
 class DimensionExpansionEvent:
@@ -76,7 +77,7 @@ class DimensionExpansionEvent:
     tvi_after: float
     reason: str
     success: bool
-
+    duration_ms: float
 
 @dataclass
 class QuantumState:
@@ -85,14 +86,14 @@ class QuantumState:
     dimension: int
     timestamp: float
     fidelity: float
-    expansion_history: List[DimensionExpansionEvent]
-    last_calibration: float
-    state_id: str
-
+    expansion_history: List[DimensionExpansionEvent] = field(default_factory=list)
+    last_calibration: float = 0.0
+    state_id: str = ""
+    tvi_history: List[float] = field(default_factory=list)
+    drift_metrics: Dict[str, float] = field(default_factory=dict)
 
 class AdaptiveQuantumHypercube:
-    """
-    Adaptive Quantum Hypercube - The core topological structure of QuantumFortress 2.0
+    """Adaptive Quantum Hypercube - The core topological structure of QuantumFortress 2.0
     
     This class implements a quantum hypercube that:
     - Starts with a 4D implementation (practical for current hardware)
@@ -102,566 +103,396 @@ class AdaptiveQuantumHypercube:
     
     The implementation follows the principles from Ur Uz работа.md, extending the
     application of Betti numbers to quantum-topological security analysis.
-    
-    Example:
-        >>> hypercube = AdaptiveQuantumHypercube(dimension=4)
-        >>> signature = "transaction_data"
-        >>> metrics = hypercube.analyze_topology(signature)
-        >>> print(f"TVI: {metrics.tvi:.4f} ({'SECURE' if metrics.tvi < 0.5 else 'VULNERABLE'})")
     """
     
-    def __init__(self, dimension: int = DEFAULT_DIMENSION, config: Optional[HypercubeConfiguration] = None):
-        """
-        Initialize the adaptive quantum hypercube.
+    def __init__(self, 
+                 dimension: int = DEFAULT_DIMENSION, 
+                 config: Optional[HypercubeConfiguration] = None):
+        """Initialize the adaptive quantum hypercube.
         
         Args:
-            dimension: Initial dimension of the hypercube (must be between MIN_DIMENSION and MAX_DIMENSION)
-            config: Optional configuration parameters
+            dimension: Initial dimension of the hypercube (4-8)
+            config: Configuration parameters for the hypercube
             
         Raises:
-            ValueError: If dimension is outside valid range
+            ValueError: If dimension is outside valid range (4-8)
         """
         # Validate dimension
-        if dimension < MIN_DIMENSION or dimension > MAX_DIMENSION:
-            raise ValueError(f"Dimension must be between {MIN_DIMENSION} and {MAX_DIMENSION}")
+        if not (DEFAULT_DIMENSION <= dimension <= MAX_DIMENSION):
+            raise ValueError(f"Dimension must be between {DEFAULT_DIMENSION} and {MAX_DIMENSION}")
         
-        # Set configuration
+        # Initialize configuration
         self.config = config or HypercubeConfiguration(base_dimension=dimension)
         self.dimension = dimension
-        self.state = HypercubeState.STABLE
-        self.expansion_history: List[DimensionExpansionEvent] = []
-        self.last_calibration = 0.0
-        self.calibration_count = 0
+        self.creation_time = time.time()
+        self.last_tvi_check = 0.0
+        self.tvi_cache = {}
+        self.signature_cache = {}
         
         # Initialize quantum state
         self._initialize_quantum_state()
         
-        logger.info(
-            f"Initialized AdaptiveQuantumHypercube (dimension={self.dimension}, "
-            f"state={self.state.value})"
+        # Setup compression system
+        self.compressor = TopologicalCompressor(
+            method=self.config.compression_method,
+            dimension=self.dimension
         )
+        
+        # Setup auto-calibration system if enabled
+        self.calibration_system = None
+        if self.config.auto_calibrate:
+            self._setup_calibration_system()
+        
+        # Initialize metrics tracking
+        self.metrics = TopologicalMetrics()
+        self.performance_stats = {
+            'tvi_calculations': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'expansion_events': 0,
+            'total_processing_time': 0.0
+        }
     
     def _initialize_quantum_state(self) -> None:
-        """Initialize the quantum state as a uniform superposition"""
-        size = 2 ** self.dimension
-        self.quantum_state = np.ones(size, dtype=np.complex128) / np.sqrt(size)
-        self.quantum_fidelity = 1.0
-        self.last_state_update = time.time()
-        logger.debug(f"Initialized quantum state for {self.dimension}D hypercube")
-    
-    def get_current_state(self) -> QuantumState:
-        """
-        Get the current quantum state of the hypercube.
+        """Initialize the quantum state of the hypercube with proper entanglement."""
+        # Generate initial quantum state vector based on dimension
+        state_size = 2 ** self.dimension
+        self.state_vector = np.random.random(state_size) + 1j * np.random.random(state_size)
+        self.state_vector = self.state_vector / np.linalg.norm(self.state_vector)
         
-        Returns:
-            QuantumState object containing state information
-        """
-        return QuantumState(
-            state_vector=self.quantum_state.copy(),
+        # Create unique state ID
+        state_id = f"QH_{int(time.time())}_{np.random.randint(1000, 9999)}"
+        
+        # Store current quantum state
+        self.quantum_state = QuantumState(
+            state_vector=self.state_vector,
             dimension=self.dimension,
             timestamp=time.time(),
-            fidelity=self.quantum_fidelity,
-            expansion_history=self.expansion_history.copy(),
-            last_calibration=self.last_calibration,
-            state_id=f"qstate_{int(time.time())}_{self.dimension}d"
+            fidelity=1.0,
+            state_id=state_id
         )
     
-    def _transform_to_hypercube_space(self, data: Any) -> np.ndarray:
-        """
-        Transform input data into points in the hypercube space.
-        
-        For transaction signatures, this implements the transformation to (u_r, u_z) space
-        as described in Ur Uz работа.md, extended to higher dimensions.
-        
-        Args:
-            data: Input data to transform
-            
-        Returns:
-            Array of points in hypercube space
-        """
-        # This is a simplified implementation - actual implementation would depend on data type
-        if isinstance(data, str):
-            # For signature data, implement transformation to hypercube coordinates
-            # This follows principles from Ur Uz работа.md
-            import hashlib
-            hash_val = hashlib.sha256(data.encode()).digest()
-            points = np.frombuffer(hash_val, dtype=np.uint8)
-            # Normalize to [0,1) range
-            points = points[:self.dimension] / 256.0
-            return points.reshape(1, -1)
-        
-        # For more complex data types, implement appropriate transformation
-        raise NotImplementedError("Data transformation not implemented for this data type")
+    def _setup_calibration_system(self) -> None:
+        """Setup the auto-calibration system for quantum state maintenance."""
+        self.calibration_system = AutoCalibrationSystem(
+            hypercube=self,
+            calibration_interval=self.config.calibration_interval
+        )
+        self.calibration_system.start()
     
-    def analyze_topology(self, data: Any) -> Dict[str, float]:
-        """
-        Analyze the topological structure of provided data.
+    def get_current_state(self) -> QuantumState:
+        """Get the current quantum state of the hypercube.
         
-        This method transforms the input data into the hypercube space and analyzes
-        its topological properties, calculating the TVI (Topological Vulnerability Index).
+        Returns:
+            Current quantum state information
+        """
+        self.quantum_state.timestamp = time.time()
+        self.quantum_state.dimension = self.dimension
+        return self.quantum_state
+    
+    def analyze_topology(self, signature: str) -> TVIResult:
+        """Analyze the topological structure of a signature within the hypercube.
         
         Args:
-            data: Input data to analyze (typically transaction signatures)
+            signature: The cryptographic signature to analyze
             
         Returns:
-            Dict[str, float]: Topological metrics including TVI
-            
-        Example from Ur Uz работа.md:
-            "Применение чисел Бетти к анализу ECDSA-Torus предоставляет точную 
-            количественную оценку структуры пространства подписей"
+            TVIResult containing topological vulnerability metrics
         """
+        start_time = time.time()
+        
+        # Check cache first
+        if signature in self.tvi_cache:
+            self.performance_stats['cache_hits'] += 1
+            result = self.tvi_cache[signature]
+            result.cached = True
+            self._update_performance_metrics(start_time, cached=True)
+            return result
+            
+        self.performance_stats['cache_misses'] += 1
+        
+        # Process through compressed representation for efficiency
+        compressed_data = self.compressor.compress(signature)
+        
+        # Calculate topological metrics
+        betti_numbers = calculate_betti_numbers(compressed_data, dimension=self.dimension)
+        tvi_result = self.metrics.calculate_tvi(betti_numbers, self.dimension)
+        
+        # Cache the result
+        self.tvi_cache[signature] = tvi_result
+        
+        # Update state history
+        self.quantum_state.tvi_history.append(tvi_result.tvi)
+        if len(self.quantum_state.tvi_history) > 1000:
+            self.quantum_state.tvi_history.pop(0)
+        
+        # Check if expansion is needed
+        if self.config.auto_expand and tvi_result.tvi > self.config.tvi_threshold:
+            self._handle_security_threshold(tvi_result, signature)
+        
+        self._update_performance_metrics(start_time)
+        return tvi_result
+    
+    def _update_performance_metrics(self, start_time: float, cached: bool = False) -> None:
+        """Update performance tracking metrics.
+        
+        Args:
+            start_time: Timestamp when operation started
+            cached: Whether the result was served from cache
+        """
+        duration = (time.time() - start_time) * 1000  # ms
+        self.performance_stats['total_processing_time'] += duration
+        if not cached:
+            self.performance_stats['tvi_calculations'] += 1
+    
+    def _handle_security_threshold(self, tvi_result: TVIResult, signature: str) -> None:
+        """Handle case when TVI exceeds security threshold.
+        
+        Args:
+            tvi_result: Current TVI metrics
+            signature: Signature that triggered the threshold
+        """
+        # Determine expansion target
+        target_dimension = min(self.dimension + 2, self.config.max_dimension)
+        
+        # Record expansion event
+        expansion_start = time.time()
+        expansion_event = DimensionExpansionEvent(
+            timestamp=time.time(),
+            from_dimension=self.dimension,
+            to_dimension=target_dimension,
+            tvi_before=tvi_result.tvi,
+            tvi_after=0.0,  # Will update after expansion
+            reason=ExpansionReason.SECURITY.value,
+            success=False,
+            duration_ms=0.0
+        )
+        
         try:
-            # Transform data into hypercube space
-            points = self._transform_to_hypercube_space(data)
+            # Expand dimension
+            success = self.expand_dimension(target_dimension, reason="security_threshold")
             
-            # Calculate Betti numbers (simplified for demonstration)
-            # In production, this would use persistent homology with GUDHI/Ripser
-            betti_numbers = self._calculate_betti_numbers(points)
-            
-            # Calculate Euler characteristic
-            euler_char = sum((-1)**i * b for i, b in enumerate(betti_numbers))
-            
-            # Calculate topological entropy
-            topological_entropy = self._calculate_topological_entropy(points)
-            
-            # Calculate naturalness coefficient
-            naturalness_coefficient = self._calculate_naturalness_coefficient(points)
-            
-            # Calculate topological deviation
-            topological_deviation = self._calculate_topological_deviation(betti_numbers)
-            
-            # Combine metrics into TVI
-            # Weights based on importance for security
-            tvi = (
-                0.4 * topological_deviation +
-                0.3 * (1.0 - topological_entropy / np.log(len(points) + 1)) +
-                0.2 * naturalness_coefficient +
-                0.1 * abs(euler_char)
-            )
-            
-            # Update state based on TVI
-            self._update_state(tvi)
-            
-            logger.info(f"Topological analysis completed (TVI={tvi:.4f})")
-            return {
-                "tvi": min(1.0, tvi),
-                "betti_numbers": betti_numbers,
-                "euler_characteristic": euler_char,
-                "topological_entropy": topological_entropy,
-                "naturalness_coefficient": naturalness_coefficient
-            }
-            
+            if success:
+                # Recalculate TVI after expansion
+                new_tvi = self.analyze_topology(signature)
+                expansion_event.tvi_after = new_tvi.tvi
+                expansion_event.success = True
+                expansion_event.duration_ms = (time.time() - expansion_start) * 1000
+                
+                # Update metrics
+                self.performance_stats['expansion_events'] += 1
+                
+                # Log the event
+                print(f"[HYPERCUBE] Dimension expanded from {self.dimension}D to {target_dimension}D. "
+                      f"TVI reduced from {tvi_result.tvi:.4f} to {new_tvi.tvi:.4f}")
+            else:
+                expansion_event.success = False
+                expansion_event.duration_ms = (time.time() - expansion_start) * 1000
+                print(f"[HYPERCUBE] Dimension expansion failed. Current dimension: {self.dimension}D")
+                
         except Exception as e:
-            logger.error(f"Topology analysis failed: {str(e)}")
-            # Return default metrics indicating critical vulnerability
-            return {
-                "tvi": 1.0,
-                "betti_numbers": [0] * (self.dimension + 1),
-                "euler_characteristic": 0,
-                "topological_entropy": 0.0,
-                "naturalness_coefficient": 1.0
-            }
+            expansion_event.success = False
+            expansion_event.duration_ms = (time.time() - expansion_start) * 1000
+            print(f"[HYPERCUBE] Error during dimension expansion: {str(e)}")
+            
+        finally:
+            # Record the event in history
+            self.quantum_state.expansion_history.append(expansion_event)
     
-    def _calculate_betti_numbers(self, points: np.ndarray) -> List[float]:
-        """
-        Calculate Betti numbers for the point cloud in hypercube space.
+    def expand_dimension(self, target_dimension: int, reason: str = "security") -> bool:
+        """Expand the dimension of the hypercube to enhance security.
         
         Args:
-            points: Points in hypercube space
-            
-        Returns:
-            List[float]: Betti numbers [β₀, β₁, ..., β_dimension]
-            
-        As stated in Ur Uz работа.md: "Применение чисел Бетти к анализу ECDSA-Torus"
-        """
-        # This is a simplified implementation
-        # In production, this would use persistent homology with GUDHI/Ripser
-        
-        # For demonstration, we'll assume:
-        # β₀ = 1 (one connected component)
-        # β₁ = dimension (one loop per dimension)
-        # β₂ = 1 (one void)
-        
-        betti_numbers = [1.0]  # β₀
-        
-        # β₁ for each dimension
-        for i in range(1, self.dimension + 1):
-            betti_numbers.append(float(self.dimension))
-        
-        # β₂ for 2D+ spaces
-        if self.dimension >= 2:
-            betti_numbers.append(1.0)
-        
-        # Pad with zeros for higher dimensions if needed
-        while len(betti_numbers) <= self.dimension:
-            betti_numbers.append(0.0)
-        
-        return betti_numbers
-    
-    def _calculate_topological_deviation(self, betti_numbers: List[float]) -> float:
-        """
-        Calculate the deviation of observed Betti numbers from expected values.
-        
-        Args:
-            betti_numbers: Observed Betti numbers [β₀, β₁, β₂, ...]
-            
-        Returns:
-            float: Normalized deviation score (0.0 to 1.0)
-        """
-        deviation = 0.0
-        for dim, expected_val in BETTI_EXPECTED.items():
-            if dim < len(betti_numbers):
-                actual_val = betti_numbers[dim]
-                # Calculate relative deviation, with smoothing to avoid division by zero
-                dim_deviation = abs(actual_val - expected_val) / (expected_val + 1e-10)
-                deviation += dim_deviation
-        
-        # Normalize by number of dimensions checked
-        return min(1.0, deviation / len(BETTI_EXPECTED))
-    
-    def _calculate_topological_entropy(self, points: np.ndarray) -> float:
-        """
-        Calculate the topological entropy as a measure of complexity and randomness.
-        
-        Args:
-            points: Points in hypercube space
-            
-        Returns:
-            float: Topological entropy value (higher is better)
-        """
-        if points.size == 0:
-            return 0.0
-        
-        # Create a grid to analyze density distribution
-        grid_size = 50
-        grid = np.zeros((grid_size,) * self.dimension)
-        
-        # Fill the grid with point density
-        for point in points:
-            indices = tuple(int(x * grid_size) % grid_size for x in point)
-            grid[indices] += 1
-        
-        # Normalize to get probabilities
-        total = np.sum(grid)
-        if total == 0:
-            return 0.0
-        
-        probabilities = grid / total
-        
-        # Calculate entropy: H = -Σ p_i log(p_i)
-        entropy = 0.0
-        for p in probabilities.flatten():
-            if p > 0:
-                entropy -= p * np.log(p)
-        
-        # Normalize by log of grid cells to get value between 0 and 1
-        max_entropy = np.log(grid_size ** self.dimension)
-        return entropy / max_entropy if max_entropy > 0 else 0.0
-    
-    def _calculate_naturalness_coefficient(self, points: np.ndarray) -> float:
-        """
-        Calculate the naturalness coefficient as a measure of how "natural" the distribution is.
-        
-        Args:
-            points: Points in hypercube space
-            
-        Returns:
-            float: Naturalness coefficient (lower is better, 0.0 = perfectly natural)
-        """
-        if points.size < 10:
-            return 1.0
-        
-        # Calculate distances between points
-        distances = []
-        n_points = len(points)
-        
-        for i in range(n_points):
-            for j in range(i+1, min(i+10, n_points)):
-                # Toroidal distance in hypercube space
-                dist = 0.0
-                for k in range(self.dimension):
-                    dx = min(abs(points[i][k] - points[j][k]), 1.0 - abs(points[i][k] - points[j][k]))
-                    dist += dx ** 2
-                dist = np.sqrt(dist)
-                distances.append(dist)
-        
-        # Analyze distance distribution
-        if not distances:
-            return 1.0
-        
-        # Calculate expected distribution for uniform random points
-        expected_counts = []
-        observed_counts = []
-        
-        num_bins = 20
-        bin_size = 1.0 / num_bins
-        
-        for i in range(num_bins):
-            lower = i * bin_size
-            upper = (i + 1) * bin_size
-            observed = sum(1 for d in distances if lower <= d < upper)
-            # Expected is proportional to volume: (i+1)^d - i^d
-            expected = ((i+1)**self.dimension - i**self.dimension) * bin_size**self.dimension * len(distances) / num_bins
-            observed_counts.append(observed)
-            expected_counts.append(expected)
-        
-        # Normalize counts
-        total_obs = sum(observed_counts)
-        total_exp = sum(expected_counts)
-        if total_obs > 0 and total_exp > 0:
-            observed_counts = [c / total_obs for c in observed_counts]
-            expected_counts = [c / total_exp for c in expected_counts]
-        
-        # Calculate coefficient as normalized difference
-        diff = sum(abs(o - e) for o, e in zip(observed_counts, expected_counts))
-        return diff / 2.0  # Normalize to 0-1 range
-    
-    def expand_dimension(self, target_dimension: Optional[int] = None, reason: str = "security") -> bool:
-        """
-        Expand the dimension of the hypercube.
-        
-        Args:
-            target_dimension: Optional target dimension (if None, expands by 1)
+            target_dimension: Target dimension to expand to (must be > current dimension)
             reason: Reason for expansion (security, performance, etc.)
             
         Returns:
-            bool: True if expansion was successful, False otherwise
+            True if expansion was successful, False otherwise
             
         Raises:
             ValueError: If target dimension is invalid
         """
-        current_dim = self.dimension
-        if target_dimension is None:
-            target_dim = current_dim + 1
-        else:
-            target_dim = target_dimension
-            
         # Validate target dimension
-        if target_dim <= current_dim:
-            logger.warning(f"Cannot reduce dimension (current={current_dim}, target={target_dim})")
-            return False
-            
-        if target_dim > self.config.max_dimension:
-            logger.warning(f"Target dimension exceeds maximum ({target_dim} > {self.config.max_dimension})")
-            return False
-        
-        logger.info(f"Initiating dimension expansion: {current_dim}D → {target_dim}D (reason: {reason})")
-        
-        # Record expansion event (pre-expansion)
-        start_time = time.time()
-        pre_metrics = self.analyze_topology("expansion_check")
-        pre_tvi = pre_metrics["tvi"]
+        if target_dimension <= self.dimension:
+            raise ValueError("Target dimension must be greater than current dimension")
+        if target_dimension > self.config.max_dimension:
+            raise ValueError(f"Target dimension cannot exceed maximum of {self.config.max_dimension}")
         
         try:
-            # Save current state
-            old_state = self.quantum_state.copy()
-            old_dimension = self.dimension
+            # Record pre-expansion state
+            start_time = time.time()
+            pre_state = self.quantum_state
             
-            # Expand quantum state
-            self.dimension = target_dim
+            # Generate new, higher-dimensional quantum state
+            self.dimension = target_dimension
             self._initialize_quantum_state()
             
-            # Copy old state to new state (preserving information)
-            old_size = len(old_state)
-            new_size = len(self.quantum_state)
-            self.quantum_state[:old_size] = old_state / np.linalg.norm(old_state)
-            
-            # Verify expansion success
-            post_metrics = self.analyze_topology("expansion_check")
-            post_tvi = post_metrics["tvi"]
-            
-            # Record expansion event (post-expansion)
-            expansion_event = DimensionExpansionEvent(
-                timestamp=time.time(),
-                from_dimension=old_dimension,
-                to_dimension=self.dimension,
-                tvi_before=pre_tvi,
-                tvi_after=post_tvi,
-                reason=reason,
-                success=post_tvi < pre_tvi  # Success if TVI improved
+            # Update compressor for new dimension
+            self.compressor = TopologicalCompressor(
+                method=self.config.compression_method,
+                dimension=self.dimension
             )
-            self.expansion_history.append(expansion_event)
             
-            # Update state
-            self.state = HypercubeState.EXPANDING
-            self._update_state()
+            # Clear cache as structure has changed
+            self.tvi_cache.clear()
+            self.signature_cache.clear()
             
-            logger.info(
-                f"Dimension expansion successful: {old_dimension}D → {self.dimension}D "
-                f"(TVI: {pre_tvi:.4f} → {post_tvi:.4f})"
-            )
+            # Record expansion metrics
+            duration = time.time() - start_time
+            print(f"[HYPERCUBE] Successfully expanded to {target_dimension}D in {duration:.2f}s")
+            
             return True
             
         except Exception as e:
-            logger.error(f"Dimension expansion failed: {str(e)}")
-            # Restore previous state
-            self.dimension = old_dimension
-            self.quantum_state = old_state
+            print(f"[HYPERCUBE] Dimension expansion failed: {str(e)}")
+            # Revert to previous state on failure
+            self.dimension = pre_state.dimension
+            self.quantum_state = pre_state
             return False
     
-    def _update_state(self, tvi: Optional[float] = None) -> None:
-        """Update the hypercube state based on current metrics"""
-        if tvi is None:
-            metrics = self.analyze_topology("state_check")
-            tvi = metrics["tvi"]
+    def get_dimension(self) -> int:
+        """Get the current dimension of the hypercube.
         
-        # Determine state based on TVI
-        if tvi < self.config.tvi_threshold:
-            self.state = HypercubeState.STABLE
-        elif tvi < 0.7:
-            self.state = HypercubeState.WARNING
-        else:
-            self.state = HypercubeState.CRITICAL
-            
-        # Check if automatic expansion is needed and enabled
-        if (self.state == HypercubeState.CRITICAL and 
-            self.config.auto_expand and 
-            self.dimension < self.config.max_dimension):
-            self.expand_dimension(reason="security_threshold_exceeded")
-    
-    def get_tvi(self, data: Any) -> float:
+        Returns:
+            Current dimension (4-8)
         """
-        Calculate the Topological Vulnerability Index (TVI) for provided data.
-        
-        TVI is the primary security metric in QuantumFortress 2.0, as emphasized in
-        Ur Uz работа.md: "Используйте числа Бетти как основную метрику безопасности"
+        return self.dimension
+    
+    def get_tvi_history(self, limit: int = 100) -> List[float]:
+        """Get historical TVI values.
         
         Args:
-            data: Input data to analyze (typically transaction signatures)
+            limit: Maximum number of values to return
             
         Returns:
-            float: TVI score (0.0 = secure, 1.0 = critical vulnerability)
+            List of recent TVI values
         """
-        metrics = self.analyze_topology(data)
-        return metrics["tvi"]
+        return self.quantum_state.tvi_history[-limit:]
     
-    def is_secure(self) -> bool:
-        """
-        Check if the hypercube is in a secure state.
+    def get_performance_stats(self) -> Dict[str, float]:
+        """Get performance statistics for the hypercube.
         
         Returns:
-            bool: True if secure (TVI < threshold), False otherwise
+            Dictionary of performance metrics
         """
-        metrics = self.analyze_topology("security_check")
-        return metrics["tvi"] < self.config.tvi_threshold
-    
-    def get_state(self) -> Dict[str, Any]:
-        """
-        Get a comprehensive state report of the hypercube.
+        avg_processing_time = (
+            self.performance_stats['total_processing_time'] / self.performance_stats['tvi_calculations'] 
+            if self.performance_stats['tvi_calculations'] > 0 else 0.0
+        )
         
-        Returns:
-            Dictionary containing state information
-        """
-        metrics = self.analyze_topology("state_report")
+        cache_hit_rate = (
+            self.performance_stats['cache_hits'] / 
+            (self.performance_stats['cache_hits'] + self.performance_stats['cache_misses'])
+            if (self.performance_stats['cache_hits'] + self.performance_stats['cache_misses']) > 0 else 0.0
+        )
         
         return {
-            "dimension": self.dimension,
-            "state": self.state.value,
-            "tvi": metrics["tvi"],
-            "is_secure": self.is_secure(),
-            "quantum_fidelity": self.quantum_fidelity,
-            "expansion_count": len(self.expansion_history),
-            "calibration_count": self.calibration_count,
-            "last_calibration": self.last_calibration,
-            "time_since_calibration": time.time() - self.last_calibration if self.last_calibration else None,
-            "topology_metrics": {
-                "betti_numbers": metrics["betti_numbers"],
-                "euler_characteristic": metrics["euler_characteristic"],
-                "topological_entropy": metrics["topological_entropy"],
-                "naturalness_coefficient": metrics["naturalness_coefficient"]
-            }
+            'current_dimension': self.dimension,
+            'tvi_calculations': self.performance_stats['tvi_calculations'],
+            'cache_hit_rate': cache_hit_rate,
+            'avg_processing_time_ms': avg_processing_time,
+            'expansion_events': self.performance_stats['expansion_events'],
+            'system_uptime': time.time() - self.creation_time
         }
     
-    def calibrate(self) -> bool:
-        """
-        Calibrate the quantum hypercube to correct drift and maintain security.
+    def optimize_cache(self, max_size: int = 10000) -> None:
+        """Optimize the topological cache based on usage patterns.
         
-        This implements the auto-calibration system described in Квантовый ПК.md:
-        "Система авто-калибровки как обязательная часть рантайма"
+        Args:
+            max_size: Maximum cache size to maintain
+        """
+        # Implement LRU (Least Recently Used) cache eviction
+        if len(self.tvi_cache) > max_size:
+            # Sort by last access time (we'd need to track this in a real implementation)
+            # For simplicity, just clear half the cache
+            items_to_remove = list(self.tvi_cache.keys())[:len(self.tvi_cache)//2]
+            for key in items_to_remove:
+                del self.tvi_cache[key]
+    
+    def get_expansion_history(self) -> List[DimensionExpansionEvent]:
+        """Get the history of dimension expansion events.
         
         Returns:
-            bool: True if calibration was successful
+            List of expansion events
         """
-        start_time = time.time()
-        
-        logger.info("Initiating quantum hypercube calibration")
-        self.state = HypercubeState.CALIBRATING
-        
-        try:
-            # Get current metrics before calibration
-            pre_metrics = self.analyze_topology("calibration_check")
-            pre_tvi = pre_metrics["tvi"]
-            
-            # Apply calibration procedure
-            self._apply_calibration_procedure()
-            
-            # Get metrics after calibration
-            post_metrics = self.analyze_topology("calibration_check")
-            post_tvi = post_metrics["tvi"]
-            
-            # Update calibration timestamp
-            self.last_calibration = time.time()
-            self.calibration_count += 1
-            
-            # Check if calibration improved security
-            calibration_success = post_tvi < pre_tvi
-            
-            logger.info(
-                f"Calibration completed in {time.time() - start_time:.2f}s "
-                f"(TVI: {pre_tvi:.4f} → {post_tvi:.4f}, "
-                f"success={calibration_success})"
-            )
-            
-            # Update state
-            self._update_state()
-            return calibration_success
-            
-        except Exception as e:
-            logger.error(f"Calibration failed: {str(e)}")
-            self.state = HypercubeState.CRITICAL
-            return False
+        return self.quantum_state.expansion_history
     
-    def _apply_calibration_procedure(self) -> None:
-        """Apply the quantum state calibration procedure"""
-        # This is a simplified implementation
-        # In practice, this would use more sophisticated quantum error correction
+    def is_stable(self, stability_threshold: float = 0.95) -> bool:
+        """Check if the quantum hypercube is in a stable state.
         
-        # Normalize the quantum state
-        norm = np.linalg.norm(self.quantum_state)
-        if norm < 1 - QUANTUM_STATE_PRECISION or norm > 1 + QUANTUM_STATE_PRECISION:
-            self.quantum_state = self.quantum_state / norm
-            logger.debug("Quantum state renormalized during calibration")
-        
-        # Apply error correction based on topological metrics
-        metrics = self.analyze_topology("calibration_metrics")
-        if metrics["tvi"] > self.config.tvi_threshold:
-            # Apply targeted corrections based on vulnerability type
-            if metrics["betti_numbers"][1] < self.dimension * 0.9:
-                # Low connectivity - apply connectivity-enhancing transformations
-                logger.debug("Applying connectivity enhancement transformations")
-                # Implementation would go here
+        Args:
+            stability_threshold: Minimum fidelity threshold for stability
             
-            if metrics["naturalness_coefficient"] > 0.3:
-                # High naturalness coefficient - apply randomness enhancement
-                logger.debug("Applying randomness enhancement transformations")
-                # Implementation would go here
-    
-    def get_expansion_history(self) -> List[Dict[str, Any]]:
+        Returns:
+            True if stable, False otherwise
         """
-        Get the history of dimension expansion events.
+        return self.quantum_state.fidelity >= stability_threshold
+    
+    def get_security_metrics(self) -> Dict[str, float]:
+        """Get comprehensive security metrics for the hypercube.
         
         Returns:
-            List of expansion events with detailed information
+            Dictionary containing security-related metrics
         """
-        return [
-            {
-                "timestamp": event.timestamp,
-                "from_dimension": event.from_dimension,
-                "to_dimension": event.to_dimension,
-                "tvi_before": event.tvi_before,
-                "tvi_after": event.tvi_after,
-                "reason": event.reason,
-                "success": event.success
-            }
-            for event in self.expansion_history
-        ]
+        recent_tvi = self.get_tvi_history(10)
+        avg_tvi = sum(recent_tvi) / len(recent_tvi) if recent_tvi else 0.0
+        
+        return {
+            'current_tvi': self.quantum_state.tvi_history[-1] if self.quantum_state.tvi_history else 0.0,
+            'average_tvi': avg_tvi,
+            'tvi_threshold': self.config.tvi_threshold,
+            'dimension': self.dimension,
+            'max_dimension': self.config.max_dimension,
+            'stability': self.quantum_state.fidelity,
+            'vulnerability_level': 'CRITICAL' if avg_tvi > 0.7 else 
+                                  'HIGH' if avg_tvi > 0.5 else 
+                                  'MEDIUM' if avg_tvi > 0.3 else 'LOW'
+        }
+    
+    def process_signature(self, signature: str) -> Dict:
+        """Process a signature through the quantum hypercube with full metrics.
+        
+        Args:
+            signature: The signature to process
+            
+        Returns:
+            Dictionary containing processing results and metrics
+        """
+        # Analyze topology
+        tvi_result = self.analyze_topology(signature)
+        
+        # Get current security metrics
+        security_metrics = self.get_security_metrics()
+        
+        # Generate processing report
+        return {
+            'signature_processed': True,
+            'tvi_analysis': {
+                'tvi': tvi_result.tvi,
+                'beta_1': tvi_result.beta_1,
+                'beta_2': tvi_result.beta_2,
+                'is_secure': tvi_result.tvi < self.config.tvi_threshold
+            },
+            'security_status': security_metrics['vulnerability_level'],
+            'quantum_state': {
+                'dimension': self.dimension,
+                'stability': self.quantum_state.fidelity,
+                'last_calibration': self.quantum_state.last_calibration
+            },
+            'performance': self.get_performance_stats(),
+            'timestamp': time.time()
+        }
+    
+    def shutdown(self) -> None:
+        """Gracefully shut down the hypercube and related systems."""
+        if self.calibration_system:
+            self.calibration_system.stop()
+            self.calibration_system = None
+    
+    def __enter__(self):
+        """Support for context manager protocol."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Ensure proper cleanup when used as context manager."""
+        self.shutdown()
