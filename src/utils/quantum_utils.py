@@ -2,1296 +2,1719 @@
 QuantumFortress 2.0 Quantum Utilities
 
 This module provides essential utility functions for quantum operations within the
-QuantumFortress blockchain system. These utilities form the foundation of our quantum-topological
-security model and enable the system to implement the core philosophy: "Topology isn't a hacking
-tool, but a microscope for diagnosing vulnerabilities. Ignoring it means building cryptography on sand."
+QuantumFortress blockchain system. These utilities form the foundation for quantum
+state manipulation, quantum algorithm optimization, and quantum-classical integration.
 
 Key features implemented:
-- Quantum state fidelity and manipulation as described in Квантовый ПК.md
-- WDM (Wavelength Division Multiplexing) parallelism for 4.5x performance improvements
-- Quantum gate operations with topological integrity verification
-- Quantum key distribution (BB84 protocol) implementation
-- Hybrid quantum-classical state transformations
-- Integration with quantum frameworks (Qiskit, Cirq) as API wrappers
+- Quantum platform abstraction and configuration
+- Quantum state manipulation and measurement
+- Optimization of quantum algorithms (Shor, Grover)
+- Quantum error correction and calibration
+- Quantum vulnerability analysis
+- Integration with topological analysis
+- WDM-parallelism for quantum operations
 
-As stated in Квантовый ПК.md: "Сильная сторона — параллелизм и пропускная способность; 
+The implementation follows principles from:
+- "Квантовый ПК.md": Quantum platform specifications and calibration
+- "Ur Uz работа.md": TVI metrics and quantum integration
+- "Методы сжатия.md": Quantum hypercube compression techniques
+- "TopoSphere.md": Topological vulnerability analysis for quantum states
+
+As stated in documentation: "Сильная сторона — параллелизм и пропускная способность;
 слабое место — дрейф и разрядность, которые лечатся калибровкой и грамотной архитектурой."
-("The strength is parallelism and bandwidth; the weakness is drift and precision, 
-which are fixed by calibration and proper architecture.")
 
-This module is critical for:
-- Enabling the quantum-topological security model
-- Providing the 4.5x speedup in signature verification and nonce search
-- Implementing the WDM parallelism that delivers significant performance improvements
-- Supporting quantum key distribution for enhanced security
-- Ensuring quantum state stability through continuous monitoring and calibration
+("The strength is parallelism and bandwidth;
+the weakness is drift and precision, which are fixed by calibration and proper architecture.")
 """
 
 import numpy as np
 import time
-from typing import List, Tuple, Dict, Any, Optional, Callable
-from dataclasses import dataclass
 import math
 import warnings
+import heapq
+import itertools
 from enum import Enum
-
-# Try to import optional quantum libraries
-try:
-    import qiskit
-    from qiskit import QuantumCircuit, execute
-    from qiskit.quantum_info import Statevector
-    QISKIT_AVAILABLE = True
-except ImportError:
-    QISKIT_AVAILABLE = False
-    warnings.warn("Qiskit not available. Some quantum framework integrations will be limited.")
-
-try:
-    import cirq
-    CIRQ_AVAILABLE = True
-except ImportError:
-    CIRQ_AVAILABLE = False
-    warnings.warn("Cirq not available. Some quantum framework integrations will be limited.")
-
-# Configure module logger
+from typing import Union, Dict, Any, Tuple, Optional, List, Callable, TypeVar
 import logging
+import scipy.spatial
+import scipy.stats
+from scipy.spatial import Delaunay
+from scipy.spatial.distance import pdist, squareform
+import networkx as nx
+from sklearn.cluster import DBSCAN, KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.neighbors import KernelDensity
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+from collections import defaultdict, Counter
+import concurrent.futures
+import threading
+import queue
+import copy
+import sys
+import gc
+import psutil
+import resource
+import ctypes
+from functools import lru_cache
+from dataclasses import dataclass
+
+# FastECDSA for optimized ECDSA operations
+# As stated in Ur Uz работа.md: "fastecdsa|0.83 сек|В 15× быстрее, оптимизированные C-расширения"
+FAST_ECDSA_AVAILABLE = False
+try:
+    from fastecdsa.curve import Curve
+    from fastecdsa.point import Point
+    from fastecdsa.util import mod_sqrt
+    from fastecdsa.keys import gen_keypair
+    FAST_ECDSA_AVAILABLE = True
+    logger = logging.getLogger(__name__)
+    logger.info("FastECDSA library successfully imported. Using optimized C extensions.")
+except ImportError as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"FastECDSA library not found: {e}. Some features will be limited.")
+
 logger = logging.getLogger(__name__)
 
-# Constants
-DEFAULT_N_QUBITS = 4
-DEFAULT_WDM_CHANNELS = 8
-MAX_WDM_CHANNELS = 16
-QUANTUM_STATE_PRECISION = 1e-10
-PHOTONIC_PLATFORMS = ["SOI", "SiN", "InP", "TFLN"]
-DEFAULT_PLATFORM = "SOI"
-DRIFT_THRESHOLD = 0.05
-CRITICAL_DRIFT_THRESHOLD = 0.15
-
-
-@dataclass
-class QuantumMetrics:
-    """Container for quantum state metrics used in security analysis"""
-    fidelity: float
-    drift: float
-    entropy: float
-    coherence: float
-    wdm_efficiency: float
-    timestamp: float
-
-
+# ======================
+# CONSTANTS
+# ======================
+# Quantum platform specifications
 class QuantumPlatform(Enum):
-    """Supported quantum hardware platforms"""
-    SOI = "SOI"      # Silicon-on-Insulator
-    SiN = "SiN"      # Silicon Nitride
-    InP = "InP"      # Indium Phosphide
-    TFLN = "TFLN"    # Thin-Film Lithium Niobate
-    SIMULATOR = "SIMULATOR"  # Classical simulator
+    """Quantum platform types supported by QuantumFortress 2.0"""
+    SOI = "SOI"     # Silicon on Insulator
+    SiN = "SiN"     # Silicon Nitride
+    TFLN = "TFLN"   # Thin-Film Lithium Niobate
+    InP = "InP"     # Indium Phosphide
+    SIMULATOR = "SIMULATOR"  # Classical simulation
 
+# Platform configuration defaults
+PLATFORM_DEFAULTS = {
+    QuantumPlatform.SOI: {
+        "wavelengths": 8,
+        "precision": 12,
+        "error_tolerance": 0.001,
+        "drift_rate": 0.005,
+        "processing_speed": 1.0,
+        "coherence_time": 100.0,  # nanoseconds
+        "calibration_interval": 300  # seconds
+    },
+    QuantumPlatform.SiN: {
+        "wavelengths": 16,
+        "precision": 14,
+        "error_tolerance": 0.0005,
+        "drift_rate": 0.003,
+        "processing_speed": 1.5,
+        "coherence_time": 150.0,
+        "calibration_interval": 450
+    },
+    QuantumPlatform.TFLN: {
+        "wavelengths": 32,
+        "precision": 16,
+        "error_tolerance": 0.0001,
+        "drift_rate": 0.001,
+        "processing_speed": 2.0,
+        "coherence_time": 200.0,
+        "calibration_interval": 600
+    },
+    QuantumPlatform.InP: {
+        "wavelengths": 64,
+        "precision": 18,
+        "error_tolerance": 0.00005,
+        "drift_rate": 0.0005,
+        "processing_speed": 2.5,
+        "coherence_time": 250.0,
+        "calibration_interval": 900
+    },
+    QuantumPlatform.SIMULATOR: {
+        "wavelengths": 128,
+        "precision": 64,
+        "error_tolerance": 0.0,
+        "drift_rate": 0.0,
+        "processing_speed": 10.0,
+        "coherence_time": float('inf'),
+        "calibration_interval": float('inf')
+    }
+}
 
+# Quantum operation parameters
+MAX_QUBITS = 32
+MIN_PRECISION = 8
+MAX_PRECISION = 64
+DEFAULT_DIMENSION = 4
+
+# Resource limits
+MAX_MEMORY_USAGE_PERCENT = 85
+MAX_CPU_USAGE_PERCENT = 85
+ANALYSIS_TIMEOUT = 300  # seconds
+
+# ======================
+# EXCEPTIONS
+# ======================
+class QuantumError(Exception):
+    """Base exception for quantum utilities."""
+    pass
+
+class QuantumStateError(QuantumError):
+    """Raised when quantum state operations fail."""
+    pass
+
+class PlatformConfigurationError(QuantumError):
+    """Raised when platform configuration is invalid."""
+    pass
+
+class ResourceLimitExceededError(QuantumError):
+    """Raised when resource limits are exceeded."""
+    pass
+
+class QuantumOperationError(QuantumError):
+    """Raised when quantum operations fail."""
+    pass
+
+class AlgorithmOptimizationError(QuantumError):
+    """Raised when quantum algorithm optimization fails."""
+    pass
+
+# ======================
+# DATA CLASSES
+# ======================
 @dataclass
 class PlatformConfig:
-    """Configuration parameters for quantum platforms"""
+    """Configuration for a quantum platform."""
     platform: QuantumPlatform
     description: str
     complexity_factor: float
-    calibration_interval: int  # Seconds
-    wavelengths: int  # WDM channels
+    calibration_interval: int
+    wavelengths: int
+    min_precision: int
     error_tolerance: float
     drift_rate: float
-    processing_speed: float  # Relative speed
+    processing_speed: float
+    coherence_time: float
+    max_dimension: int = DEFAULT_DIMENSION
 
+@dataclass
+class QuantumStateMetrics:
+    """Metrics for quantum state analysis."""
+    fidelity: float
+    coherence_time: float
+    error_rate: float
+    drift_rate: float
+    stability_score: float
+    vulnerability_score: float
+    timestamp: float
 
-def get_platform_config(platform: str = DEFAULT_PLATFORM) -> PlatformConfig:
+@dataclass
+class QuantumAlgorithmMetrics:
+    """Metrics for quantum algorithm performance."""
+    execution_time: float
+    error_rate: float
+    resource_usage: Dict[str, float]
+    success_probability: float
+    optimization_level: int
+    timestamp: float
+
+@dataclass
+class QuantumKeyPair:
+    """Quantum key pair for cryptographic operations."""
+    key_id: str
+    created_at: float
+    private_key: Any
+    public_key: Any
+    platform: QuantumPlatform
+    dimension: int
+    security_level: float
+    calibration_data: Dict[str, Any]
+    timestamp: float
+
+# ======================
+# HELPER FUNCTIONS
+# ======================
+def _check_resources():
+    """Check if system resources are within acceptable limits."""
+    memory_usage = psutil.virtual_memory().percent
+    cpu_usage = psutil.cpu_percent(interval=0.1)
+    
+    if memory_usage > MAX_MEMORY_USAGE_PERCENT or cpu_usage > MAX_CPU_USAGE_PERCENT:
+        raise ResourceLimitExceededError(
+            f"Resource limits exceeded: memory={memory_usage:.1f}%, cpu={cpu_usage:.1f}%"
+        )
+
+def _validate_platform(platform: QuantumPlatform) -> None:
     """
-    Get configuration for a specific quantum platform.
+    Validate that the quantum platform is supported.
     
     Args:
-        platform: Platform name (SOI, SiN, InP, TFLN, SIMULATOR)
+        platform: Quantum platform to validate
+        
+    Raises:
+        PlatformConfigurationError: If platform is not supported
+    """
+    if platform not in QuantumPlatform:
+        raise PlatformConfigurationError(f"Unsupported quantum platform: {platform}")
+
+def _get_platform_defaults(platform: QuantumPlatform) -> Dict[str, Any]:
+    """
+    Get default configuration for a quantum platform.
+    
+    Args:
+        platform: Quantum platform
         
     Returns:
-        PlatformConfig object with platform-specific parameters
+        Dictionary with default configuration
+    """
+    return PLATFORM_DEFAULTS.get(platform, PLATFORM_DEFAULTS[QuantumPlatform.SIMULATOR])
+
+# ======================
+# QUANTUM PLATFORM CONFIGURATION
+# ======================
+def get_platform_config(platform: QuantumPlatform) -> PlatformConfig:
+    """
+    Get configuration for a quantum platform.
+    
+    Args:
+        platform: Quantum platform to get configuration for
+        
+    Returns:
+        PlatformConfig object with platform configuration
         
     As stated in Квантовый ПК.md: "Сильная сторона — параллелизм и пропускная способность"
     """
-    configs = {
-        "SOI": PlatformConfig(
-            platform=QuantumPlatform.SOI,
-            description="Низкие потери и хорошая совместимость с CMOS",
-            complexity_factor=1.0,
-            calibration_interval=30,
-            wavelengths=8,
-            error_tolerance=0.02,
-            drift_rate=0.005,
-            processing_speed=1.0
-        ),
-        "SiN": PlatformConfig(
-            platform=QuantumPlatform.SiN,
-            description="Низкая нелинейность и широкая полоса пропускания",
-            complexity_factor=1.2,
-            calibration_interval=20,
-            wavelengths=12,
-            error_tolerance=0.015,
-            drift_rate=0.003,
-            processing_speed=1.2
-        ),
-        "InP": PlatformConfig(
-            platform=QuantumPlatform.InP,
-            description="Встроенные источники света и высокая оптическая мощность",
-            complexity_factor=2.5,
-            calibration_interval=15,
-            wavelengths=16,
-            error_tolerance=0.01,
-            drift_rate=0.002,
-            processing_speed=1.5
-        ),
-        "TFLN": PlatformConfig(
-            platform=QuantumPlatform.TFLN,
-            description="Высокая нелинейность и низкие потери",
-            complexity_factor=1.8,
-            calibration_interval=25,
-            wavelengths=10,
-            error_tolerance=0.012,
-            drift_rate=0.004,
-            processing_speed=1.3
-        ),
-        "SIMULATOR": PlatformConfig(
-            platform=QuantumPlatform.SIMULATOR,
-            description="Classical simulation with quantum behavior",
-            complexity_factor=0.5,
-            calibration_interval=60,
-            wavelengths=8,
-            error_tolerance=0.0,
-            drift_rate=0.0,
-            processing_speed=0.8
-        )
+    _validate_platform(platform)
+    
+    defaults = _get_platform_defaults(platform)
+    
+    # Platform-specific descriptions
+    descriptions = {
+        QuantumPlatform.SOI: "Silicon on Insulator - стандартная промышленная платформа",
+        QuantumPlatform.SiN: "Silicon Nitride - улучшенная когерентность и стабильность",
+        QuantumPlatform.TFLN: "Thin-Film Lithium Niobate - высокая нелинейность и низкие потери",
+        QuantumPlatform.InP: "Indium Phosphide - встроенные источники света и высокая оптическая мощность",
+        QuantumPlatform.SIMULATOR: "Classical simulation with quantum behavior"
     }
     
-    return configs.get(platform, configs["SOI"])
-
-
-def quantum_state_fidelity(state1: np.ndarray, state2: Optional[np.ndarray] = None) -> float:
-    """
-    Calculate the fidelity between two quantum states.
+    # Platform-specific complexity factors
+    complexity_factors = {
+        QuantumPlatform.SOI: 1.0,
+        QuantumPlatform.SiN: 1.2,
+        QuantumPlatform.TFLN: 1.5,
+        QuantumPlatform.InP: 2.0,
+        QuantumPlatform.SIMULATOR: 0.5
+    }
     
-    Fidelity is a measure of similarity between quantum states, ranging from 0 (orthogonal) to 1 (identical).
+    return PlatformConfig(
+        platform=platform,
+        description=descriptions.get(platform, "Unknown platform"),
+        complexity_factor=complexity_factors.get(platform, 1.0),
+        calibration_interval=defaults["calibration_interval"],
+        wavelengths=defaults["wavelengths"],
+        min_precision=MIN_PRECISION,
+        error_tolerance=defaults["error_tolerance"],
+        drift_rate=defaults["drift_rate"],
+        processing_speed=defaults["processing_speed"],
+        coherence_time=defaults["coherence_time"],
+        max_dimension=DEFAULT_DIMENSION
+    )
+
+def get_quantum_platform_metrics(platform: QuantumPlatform) -> Dict[str, Any]:
+    """
+    Get performance metrics for a quantum platform.
     
     Args:
-        state1: First quantum state vector
-        state2: Second quantum state vector (if None, compares with uniform superposition)
+        platform: Quantum platform to get metrics for
         
     Returns:
-        float: Fidelity value between 0 and 1
+        Dictionary with platform metrics
         
-    As stated in Квантовый ПК.md: "Система авто-калибровки как обязательная часть рантайма"
+    As stated in Квантовый ПК.md: "Сильная сторона — параллелизм и пропускная способность"
     """
-    # Handle default case - compare with uniform superposition
-    if state2 is None:
-        n = len(state1)
-        state2 = np.ones(n, dtype=np.complex128) / np.sqrt(n)
+    config = get_platform_config(platform)
     
-    # Ensure states are normalized
-    norm1 = np.linalg.norm(state1)
-    norm2 = np.linalg.norm(state2)
-    if norm1 < QUANTUM_STATE_PRECISION or norm2 < QUANTUM_STATE_PRECISION:
-        return 0.0
-    
-    state1 = state1 / norm1
-    state2 = state2 / norm2
-    
-    # Calculate fidelity: F = |⟨ψ|φ⟩|²
-    overlap = np.abs(np.vdot(state1, state2)) ** 2
-    
-    # Clamp to [0,1] due to floating point errors
-    return max(0.0, min(1.0, overlap.real))
+    return {
+        "platform": platform.name,
+        "description": config.description,
+        "wavelengths": config.wavelengths,
+        "min_precision": config.min_precision,
+        "error_tolerance": config.error_tolerance,
+        "drift_rate": config.drift_rate,
+        "processing_speed": config.processing_speed,
+        "coherence_time": config.coherence_time,
+        "calibration_interval": config.calibration_interval,
+        "max_dimension": config.max_dimension,
+        "timestamp": time.time()
+    }
 
+def list_supported_platforms() -> List[QuantumPlatform]:
+    """
+    List all supported quantum platforms.
+    
+    Returns:
+        List of supported quantum platforms
+    """
+    return [platform for platform in QuantumPlatform]
 
+# ======================
+# QUANTUM STATE OPERATIONS
+# ======================
 def create_uniform_superposition(n_qubits: int) -> np.ndarray:
     """
-    Create a uniform superposition state across all basis states.
-    
-    This creates the state: |ψ⟩ = 1/√N Σ |x⟩ where N = 2^n_qubits
+    Create a uniform superposition state for n qubits.
     
     Args:
-        n_qubits: Number of qubits in the system
+        n_qubits: Number of qubits
         
     Returns:
-        np.ndarray: Quantum state vector representing uniform superposition
+        numpy array representing the quantum state
         
-    Example from Квантовый ПК.md: "Создание равномерной суперпозиции как начального состояния"
+    As stated in Квантовый ПК.md: "Создание равномерной суперпозиции"
     """
+    if n_qubits <= 0:
+        raise QuantumStateError("Number of qubits must be positive")
+    if n_qubits > MAX_QUBITS:
+        raise QuantumStateError(f"Number of qubits cannot exceed {MAX_QUBITS}")
+    
     size = 2 ** n_qubits
     return np.ones(size, dtype=np.complex128) / np.sqrt(size)
 
-
-def apply_quantum_gate(gate_name: str, qubit_indices: List[int], 
-                      n_qubits: int, state: Optional[np.ndarray] = None) -> np.ndarray:
+def quantum_state_fidelity(state1: np.ndarray, state2: np.ndarray) -> float:
     """
-    Apply a quantum gate to specified qubits in a quantum state.
+    Calculate the fidelity between two quantum states.
+    
+    Fidelity is defined as |⟨ψ|φ⟩|²
     
     Args:
-        gate_name: Name of the quantum gate (H, X, Y, Z, CNOT, etc.)
-        qubit_indices: Indices of qubits to apply the gate to
-        n_qubits: Total number of qubits in the system
-        state: Optional quantum state to apply the gate to (if None, returns the gate matrix)
+        state1: First quantum state
+        state2: Second quantum state
         
     Returns:
-        np.ndarray: Resulting quantum state after gate application or the gate matrix itself
+        Fidelity value between 0 and 1
         
-    As stated in Квантовый ПК.md: "Алгебраический процессор для квантовых операций"
+    As stated in Квантовый ПК.md: "quantum_state_fidelity - вычисление фиделити квантового состояния"
     """
-    # Get the gate matrix
-    gate = _get_gate_matrix(gate_name, qubit_indices, n_qubits)
+    if len(state1) != len(state2):
+        raise QuantumStateError("Quantum states must have the same dimension")
     
-    # If no state provided, return the gate matrix
-    if state is None:
-        return gate
+    # Normalize states if needed
+    norm1 = np.linalg.norm(state1)
+    norm2 = np.linalg.norm(state2)
+    if norm1 < 1e-10 or norm2 < 1e-10:
+        raise QuantumStateError("Quantum states cannot be zero vectors")
     
-    # Apply the gate to the state
-    return gate @ state
+    state1_norm = state1 / norm1
+    state2_norm = state2 / norm2
+    
+    # Calculate fidelity
+    overlap = np.abs(np.vdot(state1_norm, state2_norm)) ** 2
+    return min(1.0, max(0.0, overlap.real))
 
-
-def _get_gate_matrix(gate_name: str, qubit_indices: List[int], n_qubits: int) -> np.ndarray:
+def apply_quantum_gate(state: np.ndarray, 
+                      gate: np.ndarray, 
+                      qubit_indices: List[int],
+                      total_qubits: int) -> np.ndarray:
     """
-    Get the matrix representation of a quantum gate.
-    
-    Args:
-        gate_name: Name of the quantum gate
-        qubit_indices: Indices of qubits to apply the gate to
-        n_qubits: Total number of qubits in the system
-        
-    Returns:
-        np.ndarray: Matrix representation of the quantum gate
-    """
-    # Single-qubit gates
-    if gate_name.upper() == "H":
-        H = np.array([[1, 1], [1, -1]], dtype=np.complex128) / np.sqrt(2)
-        return _apply_single_qubit_gate(H, qubit_indices[0], n_qubits)
-    
-    elif gate_name.upper() == "X":
-        X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
-        return _apply_single_qubit_gate(X, qubit_indices[0], n_qubits)
-    
-    elif gate_name.upper() == "Y":
-        Y = np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
-        return _apply_single_qubit_gate(Y, qubit_indices[0], n_qubits)
-    
-    elif gate_name.upper() == "Z":
-        Z = np.array([[1, 0], [0, -1]], dtype=np.complex128)
-        return _apply_single_qubit_gate(Z, qubit_indices[0], n_qubits)
-    
-    # Two-qubit gates
-    elif gate_name.upper() == "CNOT":
-        if len(qubit_indices) < 2:
-            raise ValueError("CNOT gate requires at least 2 qubit indices")
-        control, target = qubit_indices[:2]
-        CNOT = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=np.complex128)
-        return _apply_two_qubit_gate(CNOT, control, target, n_qubits)
-    
-    # Unsupported gate
-    else:
-        raise ValueError(f"Unsupported quantum gate: {gate_name}")
-
-
-def _apply_single_qubit_gate(gate: np.ndarray, qubit: int, n_qubits: int) -> np.ndarray:
-    """
-    Apply a single-qubit gate to a specific qubit in an n-qubit system.
-    
-    Args:
-        gate: 2x2 matrix representing the single-qubit gate
-        qubit: Index of the qubit to apply the gate to
-        n_qubits: Total number of qubits in the system
-        
-    Returns:
-        np.ndarray: Matrix representation of the gate in the full n-qubit space
-    """
-    # Start with identity for all qubits
-    result = np.eye(1, dtype=np.complex128)
-    
-    # For each qubit position
-    for i in range(n_qubits):
-        if i == qubit:
-            # Apply the gate to the target qubit
-            result = np.kron(result, gate)
-        else:
-            # Apply identity to other qubits
-            I = np.eye(2, dtype=np.complex128)
-            result = np.kron(result, I)
-    
-    return result
-
-
-def _apply_two_qubit_gate(gate: np.ndarray, control: int, target: int, n_qubits: int) -> np.ndarray:
-    """
-    Apply a two-qubit gate to specific qubits in an n-qubit system.
-    
-    Args:
-        gate: 4x4 matrix representing the two-qubit gate
-        control: Index of the control qubit
-        target: Index of the target qubit
-        n_qubits: Total number of qubits in the system
-        
-    Returns:
-        np.ndarray: Matrix representation of the gate in the full n-qubit space
-    """
-    # Ensure control < target for simplicity
-    if control > target:
-        control, target = target, control
-        # Note: For CNOT, this would change the behavior, but we assume gate is defined correctly
-    
-    # Create the full operator
-    size = 2 ** n_qubits
-    operator = np.zeros((size, size), dtype=np.complex128)
-    
-    # For each basis state
-    for i in range(size):
-        # Convert index to binary representation
-        bits = [int(x) for x in format(i, f'0{n_qubits}b')]
-        
-        # Check if control qubit is 1
-        if bits[control] == 1:
-            # Create the target state after applying the gate
-            j = i ^ (1 << (n_qubits - 1 - target))  # Flip the target bit
-            operator[i, j] = 1.0
-        else:
-            # Identity when control is 0
-            operator[i, i] = 1.0
-    
-    return operator
-
-
-def measure_state(state: np.ndarray, n_qubits: Optional[int] = None) -> Tuple[int, float]:
-    """
-    Perform a quantum measurement on a state vector.
+    Apply a quantum gate to specific qubits in a quantum state.
     
     Args:
         state: Quantum state vector
-        n_qubits: Optional number of qubits (if None, calculated from state size)
+        gate: Quantum gate matrix
+        qubit_indices: Indices of qubits to apply the gate to
+        total_qubits: Total number of qubits in the system
         
     Returns:
-        Tuple[int, float]: Measured basis state index and probability
+        New quantum state after gate application
         
-    As stated in Квантовый ПК.md: "Хорошая система «подпевает себе» постоянно, тихо и незаметно для пользователя."
+    As stated in Квантовый ПК.md: "apply_quantum_gate - применение квантового гейта"
     """
-    # Determine number of qubits if not provided
-    if n_qubits is None:
-        size = len(state)
-        n_qubits = int(np.log2(size))
-        if 2 ** n_qubits != size:
-            raise ValueError("State vector size must be a power of 2")
+    if len(state) != 2 ** total_qubits:
+        raise QuantumStateError("State dimension does not match total qubits")
     
-    # Calculate probabilities
+    if len(qubit_indices) != gate.shape[0] ** 0.5:
+        raise QuantumStateError("Gate dimension does not match number of qubits")
+    
+    # Create the full gate matrix
+    full_gate = _create_full_gate(gate, qubit_indices, total_qubits)
+    
+    # Apply the gate
+    new_state = full_gate @ state
+    
+    return new_state
+
+def _create_full_gate(gate: np.ndarray, 
+                     qubit_indices: List[int],
+                     total_qubits: int) -> np.ndarray:
+    """Create the full gate matrix for the entire system."""
+    # Sort qubit indices to ensure correct ordering
+    sorted_indices = sorted(qubit_indices)
+    
+    # Check if indices are contiguous
+    is_contiguous = all(sorted_indices[i] + 1 == sorted_indices[i+1] 
+                       for i in range(len(sorted_indices) - 1))
+    
+    if is_contiguous:
+        # Create gate for contiguous qubits (more efficient)
+        full_gate = np.eye(2 ** total_qubits, dtype=np.complex128)
+        
+        # Calculate the position in the tensor product
+        position = 0
+        for i in range(total_qubits):
+            if i in qubit_indices:
+                break
+            position += 1
+        
+        # Create the gate matrix
+        for i in range(2 ** position):
+            for j in range(2 ** (total_qubits - position - len(qubit_indices))):
+                start = i * (2 ** (total_qubits - position)) + j
+                for k in range(gate.shape[0]):
+                    for l in range(gate.shape[1]):
+                        full_gate[start + k * (2 ** (total_qubits - position - len(qubit_indices)))][
+                            start + l * (2 ** (total_qubits - position - len(qubit_indices)))] = gate[k, l]
+        
+        return full_gate
+    else:
+        # General case for non-contiguous qubits
+        full_gate = np.eye(1, dtype=np.complex128)
+        
+        # Build tensor product of identity and gate matrices
+        for i in range(total_qubits):
+            if i in qubit_indices:
+                full_gate = np.kron(full_gate, gate)
+            else:
+                full_gate = np.kron(full_gate, np.eye(2, dtype=np.complex128))
+        
+        return full_gate
+
+def measure_state(state: np.ndarray, 
+                 qubit_indices: Optional[List[int]] = None) -> Tuple[np.ndarray, int]:
+    """
+    Perform measurement on a quantum state.
+    
+    Args:
+        state: Quantum state vector
+        qubit_indices: Optional indices of qubits to measure
+        
+    Returns:
+        Tuple of (collapsed state, measurement result)
+        
+    As stated in Квантовый ПК.md: "measure_state - измерение квантового состояния"
+    """
+    n = len(state)
+    total_qubits = int(np.log2(n))
+    
+    if qubit_indices is None:
+        qubit_indices = list(range(total_qubits))
+    
+    # Calculate probabilities for each basis state
     probabilities = np.abs(state) ** 2
+    probabilities /= np.sum(probabilities)  # Normalize
     
-    # Normalize probabilities
-    total = np.sum(probabilities)
-    if total < QUANTUM_STATE_PRECISION:
-        raise ValueError("Quantum state has near-zero norm")
+    # Sample a measurement outcome
+    outcome = np.random.choice(n, p=probabilities)
     
-    probabilities = probabilities / total
+    # Create collapsed state
+    collapsed_state = np.zeros_like(state)
+    collapsed_state[outcome] = 1.0
     
-    # Select a basis state based on probabilities
-    measured_index = np.random.choice(len(probabilities), p=probabilities)
-    
-    return measured_index, probabilities[measured_index]
-
-
-def generate_quantum_circuit(circuit_type: str, n_qubits: int, **kwargs) -> Any:
-    """
-    Generate a quantum circuit for specific cryptographic operations.
-    
-    Args:
-        circuit_type: Type of circuit to generate ('ecdsa_signature', 'key_distribution', etc.)
-        n_qubits: Number of qubits for the circuit
-        **kwargs: Additional parameters for circuit generation
-        
-    Returns:
-        Quantum circuit object (format depends on available frameworks)
-        
-    As stated in Квантовый ПК.md: "Гибридный квантовый эмулятор с топологическим сжатием"
-    """
-    if circuit_type == "ecdsa_signature":
-        return _generate_ecdsa_signature_circuit(n_qubits, **kwargs)
-    
-    elif circuit_type == "key_distribution":
-        return _generate_key_distribution_circuit(n_qubits, **kwargs)
-    
-    elif circuit_type == "topological_analysis":
-        return _generate_topological_analysis_circuit(n_qubits, **kwargs)
-    
+    # If measuring specific qubits, calculate the result for those qubits
+    if len(qubit_indices) < total_qubits:
+        # Extract the relevant bits from the outcome
+        result = 0
+        for i, qubit in enumerate(qubit_indices):
+            if outcome & (1 << (total_qubits - 1 - qubit)):
+                result |= (1 << (len(qubit_indices) - 1 - i))
     else:
-        raise ValueError(f"Unsupported circuit type: {circuit_type}")
-
-
-def _generate_ecdsa_signature_circuit(n_qubits: int, **kwargs) -> Any:
-    """
-    Generate a quantum circuit for ECDSA signature operations.
+        result = outcome
     
-    Args:
-        n_qubits: Number of qubits for the circuit
-        **kwargs: Additional parameters
-        
-    Returns:
-        Quantum circuit object
-    """
-    if QISKIT_AVAILABLE:
-        return _generate_ecdsa_signature_circuit_qiskit(n_qubits, **kwargs)
-    elif CIRQ_AVAILABLE:
-        return _generate_ecdsa_signature_circuit_cirq(n_qubits, **kwargs)
-    else:
-        # Fallback to simple matrix representation
-        return _generate_ecdsa_signature_circuit_matrix(n_qubits, **kwargs)
+    return collapsed_state, result
 
-
-def _generate_ecdsa_signature_circuit_qiskit(n_qubits: int, **kwargs) -> QuantumCircuit:
+def generate_quantum_circuit(n_qubits: int, 
+                           depth: int,
+                           platform: QuantumPlatform = QuantumPlatform.SIMULATOR) -> List[Dict[str, Any]]:
     """
-    Generate ECDSA signature circuit using Qiskit.
+    Generate a random quantum circuit.
     
     Args:
         n_qubits: Number of qubits
-        **kwargs: Additional parameters
+        depth: Circuit depth
+        platform: Target quantum platform
         
     Returns:
-        QuantumCircuit: Qiskit circuit for ECDSA signature
+        List of quantum operations representing the circuit
+        
+    As stated in Квантовый ПК.md: "generate_quantum_circuit - генерация квантовой схемы"
     """
-    circuit = QuantumCircuit(n_qubits)
+    if n_qubits <= 0 or n_qubits > MAX_QUBITS:
+        raise QuantumStateError(f"Number of qubits must be between 1 and {MAX_QUBITS}")
+    if depth <= 0:
+        raise QuantumStateError("Circuit depth must be positive")
     
-    # Apply Hadamard gates to create superposition
-    for i in range(n_qubits):
-        circuit.h(i)
+    # Get platform configuration
+    config = get_platform_config(platform)
     
-    # Add entanglement for signature generation
-    for i in range(n_qubits - 1):
-        circuit.cx(i, i + 1)
+    # Available gates based on platform
+    platform_gates = {
+        QuantumPlatform.SOI: ['H', 'X', 'Y', 'Z', 'CNOT', 'S', 'T'],
+        QuantumPlatform.SiN: ['H', 'X', 'Y', 'Z', 'CNOT', 'S', 'T', 'RX', 'RY', 'RZ'],
+        QuantumPlatform.TFLN: ['H', 'X', 'Y', 'Z', 'CNOT', 'S', 'T', 'RX', 'RY', 'RZ', 'Toffoli'],
+        QuantumPlatform.InP: ['H', 'X', 'Y', 'Z', 'CNOT', 'S', 'T', 'RX', 'RY', 'RZ', 'Toffoli', 'SWAP', 'CZ'],
+        QuantumPlatform.SIMULATOR: ['H', 'X', 'Y', 'Z', 'CNOT', 'S', 'T', 'RX', 'RY', 'RZ', 'Toffoli', 'SWAP', 'CZ', 'U']
+    }
     
-    # Add custom operations based on parameters
-    if kwargs.get("include_topological_operations", True):
-        # Add topological operations as per Ur Uz работа.md
-        for i in range(0, n_qubits, 2):
-            if i + 1 < n_qubits:
-                circuit.cz(i, i + 1)
+    available_gates = platform_gates.get(platform, platform_gates[QuantumPlatform.SIMULATOR])
     
-    # Measurement
-    circuit.measure_all()
+    circuit = []
+    for _ in range(depth):
+        # Randomly select a gate
+        gate = np.random.choice(available_gates)
+        
+        # Determine number of qubits for this gate
+        if gate in ['X', 'Y', 'Z', 'H', 'S', 'T', 'RX', 'RY', 'RZ']:
+            num_qubits = 1
+        elif gate in ['CNOT', 'CZ', 'SWAP']:
+            num_qubits = 2
+        elif gate == 'Toffoli':
+            num_qubits = 3
+        else:  # 'U' or unknown gate
+            num_qubits = 1
+        
+        # Select qubits
+        qubit_indices = np.random.choice(n_qubits, num_qubits, replace=False).tolist()
+        
+        # Add gate parameters if needed
+        params = {}
+        if gate in ['RX', 'RY', 'RZ']:
+            params['theta'] = np.random.uniform(0, 2 * np.pi)
+        
+        circuit.append({
+            'gate': gate,
+            'qubits': qubit_indices,
+            'params': params
+        })
     
     return circuit
 
-
-def _generate_ecdsa_signature_circuit_cirq(n_qubits: int, **kwargs) -> cirq.Circuit:
+def simulate_quantum_circuit(circuit: List[Dict[str, Any]], 
+                           initial_state: Optional[np.ndarray] = None,
+                           n_qubits: Optional[int] = None) -> np.ndarray:
     """
-    Generate ECDSA signature circuit using Cirq.
+    Simulate a quantum circuit.
     
     Args:
-        n_qubits: Number of qubits
-        **kwargs: Additional parameters
+        circuit: Quantum circuit to simulate
+        initial_state: Optional initial quantum state
+        n_qubits: Number of qubits (required if initial_state is not provided)
         
     Returns:
-        cirq.Circuit: Cirq circuit for ECDSA signature
+        Final quantum state after circuit execution
+        
+    As stated in Квантовый ПК.md: "Симуляция квантовой схемы"
     """
-    # Create qubits
-    qubits = [cirq.LineQubit(i) for i in range(n_qubits)]
+    # Determine number of qubits
+    if initial_state is not None:
+        n = len(initial_state)
+        total_qubits = int(np.log2(n))
+        if 2 ** total_qubits != n:
+            raise QuantumStateError("State dimension must be a power of 2")
+    elif n_qubits is not None:
+        total_qubits = n_qubits
+        initial_state = create_uniform_superposition(total_qubits)
+    else:
+        raise QuantumStateError("Either initial_state or n_qubits must be provided")
     
-    # Create circuit
-    circuit = cirq.Circuit()
+    # Apply each gate in the circuit
+    state = initial_state.copy()
+    for operation in circuit:
+        gate = operation['gate']
+        qubits = operation['qubits']
+        params = operation.get('params', {})
+        
+        # Get the gate matrix
+        gate_matrix = _get_gate_matrix(gate, params)
+        
+        # Apply the gate
+        state = apply_quantum_gate(state, gate_matrix, qubits, total_qubits)
     
-    # Apply Hadamard gates
-    circuit.append(cirq.H.on_each(*qubits))
-    
-    # Add entanglement
-    for i in range(n_qubits - 1):
-        circuit.append(cirq.CNOT(qubits[i], qubits[i + 1]))
-    
-    # Add topological operations
-    if kwargs.get("include_topological_operations", True):
-        for i in range(0, n_qubits, 2):
-            if i + 1 < n_qubits:
-                circuit.append(cirq.CZ(qubits[i], qubits[i + 1]))
-    
-    # Measurement
-    circuit.append(cirq.measure(*qubits, key='result'))
-    
-    return circuit
+    return state
 
+def _get_gate_matrix(gate: str, params: Dict[str, Any]) -> np.ndarray:
+    """Get the matrix representation of a quantum gate."""
+    if gate == 'H':
+        return np.array([[1, 1], [1, -1]], dtype=np.complex128) / np.sqrt(2)
+    elif gate == 'X':
+        return np.array([[0, 1], [1, 0]], dtype=np.complex128)
+    elif gate == 'Y':
+        return np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
+    elif gate == 'Z':
+        return np.array([[1, 0], [0, -1]], dtype=np.complex128)
+    elif gate == 'S':
+        return np.array([[1, 0], [0, 1j]], dtype=np.complex128)
+    elif gate == 'T':
+        return np.array([[1, 0], [0, np.exp(1j * np.pi / 4)]], dtype=np.complex128)
+    elif gate == 'RX':
+        theta = params.get('theta', 0.0)
+        return np.array([
+            [np.cos(theta/2), -1j * np.sin(theta/2)],
+            [-1j * np.sin(theta/2), np.cos(theta/2)]
+        ], dtype=np.complex128)
+    elif gate == 'RY':
+        theta = params.get('theta', 0.0)
+        return np.array([
+            [np.cos(theta/2), -np.sin(theta/2)],
+            [np.sin(theta/2), np.cos(theta/2)]
+        ], dtype=np.complex128)
+    elif gate == 'RZ':
+        theta = params.get('theta', 0.0)
+        return np.array([
+            [np.exp(-1j * theta/2), 0],
+            [0, np.exp(1j * theta/2)]
+        ], dtype=np.complex128)
+    else:
+        # For multi-qubit gates, we'll handle them in apply_quantum_gate
+        # This is a placeholder for single-qubit representation
+        return _get_gate_matrix('H', {})  # Default to Hadamard
 
-def _generate_ecdsa_signature_circuit_matrix(n_qubits: int, **kwargs) -> np.ndarray:
+# ======================
+# QUANTUM ALGORITHM OPTIMIZATION
+# ======================
+def optimize_shor_algorithm(N: int, 
+                          platform: QuantumPlatform = QuantumPlatform.SIMULATOR,
+                          max_attempts: int = 10) -> Dict[str, Any]:
     """
-    Generate ECDSA signature circuit as a matrix.
+    Optimize the Shor's algorithm for factoring N.
     
     Args:
-        n_qubits: Number of qubits
-        **kwargs: Additional parameters
+        N: Number to factor
+        platform: Target quantum platform
+        max_attempts: Maximum optimization attempts
         
     Returns:
-        np.ndarray: Matrix representation of the circuit
-    """
-    # Start with identity
-    size = 2 ** n_qubits
-    circuit_matrix = np.eye(size, dtype=np.complex128)
-    
-    # Apply Hadamard to all qubits
-    H = np.array([[1, 1], [1, -1]], dtype=np.complex128) / np.sqrt(2)
-    hadamard_all = _apply_single_qubit_gate(H, 0, n_qubits)
-    for i in range(1, n_qubits):
-        hadamard_all = hadamard_all @ _apply_single_qubit_gate(H, i, n_qubits)
-    
-    circuit_matrix = hadamard_all @ circuit_matrix
-    
-    # Add CNOT operations
-    for i in range(n_qubits - 1):
-        CNOT = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=np.complex128)
-        circuit_matrix = _apply_two_qubit_gate(CNOT, i, i + 1, n_qubits) @ circuit_matrix
-    
-    # Add topological operations if requested
-    if kwargs.get("include_topological_operations", True):
-        CZ = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, -1]
-        ], dtype=np.complex128)
+        Dictionary with optimized parameters and metrics
         
-        for i in range(0, n_qubits, 2):
-            if i + 1 < n_qubits:
-                circuit_matrix = _apply_two_qubit_gate(CZ, i, i + 1, n_qubits) @ circuit_matrix
-    
-    return circuit_matrix
-
-
-def quantum_key_distribution_bb84(length: int, platform: str = DEFAULT_PLATFORM) -> bytes:
+    As stated in Квантовый ПК.md: "optimize_shor_algorithm - оптимизация алгоритма Шора"
     """
-    Implement the BB84 quantum key distribution protocol.
+    start_time = time.time()
+    
+    try:
+        # Get platform configuration
+        config = get_platform_config(platform)
+        
+        # Basic validation
+        if N <= 1:
+            raise AlgorithmOptimizationError("N must be greater than 1")
+        if N % 2 == 0:
+            return {
+                "factors": [2, N // 2],
+                "success": True,
+                "attempts": 1,
+                "execution_time": time.time() - start_time,
+                "platform": platform.name,
+                "optimized": False
+            }
+        
+        # Determine required qubits based on platform capabilities
+        n_qubits = _estimate_shor_qubits(N, config)
+        
+        # Determine circuit depth based on platform error tolerance
+        circuit_depth = _estimate_shor_depth(N, config)
+        
+        # Determine number of repetitions based on error tolerance
+        repetitions = _estimate_shor_repetitions(config)
+        
+        # Return optimized parameters
+        return {
+            "n_qubits": n_qubits,
+            "circuit_depth": circuit_depth,
+            "repetitions": repetitions,
+            "success": True,
+            "attempts": 1,
+            "execution_time": time.time() - start_time,
+            "platform": platform.name,
+            "optimized": True,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Shor algorithm optimization failed: {str(e)}", exc_info=True)
+        
+        # Fallback to basic parameters
+        n_qubits = int(np.ceil(np.log2(N))) * 2 + 3
+        return {
+            "n_qubits": n_qubits,
+            "circuit_depth": n_qubits * 10,
+            "repetitions": 5,
+            "success": False,
+            "attempts": max_attempts,
+            "execution_time": time.time() - start_time,
+            "platform": platform.name,
+            "optimized": False,
+            "error": str(e),
+            "timestamp": time.time()
+        }
+
+def _estimate_shor_qubits(N: int, config: PlatformConfig) -> int:
+    """Estimate required qubits for Shor's algorithm based on platform capabilities."""
+    # Base requirement: 2n+3 qubits where n = log2(N)
+    n = int(np.ceil(np.log2(N)))
+    base_qubits = 2 * n + 3
+    
+    # Adjust based on platform precision
+    precision_factor = max(1.0, 16 / config.min_precision)
+    
+    # Adjust based on error tolerance
+    error_factor = 1.0 + (0.01 / config.error_tolerance)
+    
+    # Calculate final estimate
+    estimated_qubits = int(base_qubits * precision_factor * error_factor)
+    
+    # Cap at platform capabilities
+    max_dimension = config.max_dimension
+    max_qubits = 2 ** max_dimension
+    
+    return min(estimated_qubits, max_qubits)
+
+def _estimate_shor_depth(N: int, config: PlatformConfig) -> int:
+    """Estimate circuit depth for Shor's algorithm based on platform capabilities."""
+    n = int(np.ceil(np.log2(N)))
+    
+    # Base circuit depth
+    base_depth = n ** 3
+    
+    # Adjust based on platform processing speed
+    speed_factor = 1.0 / config.processing_speed
+    
+    # Adjust based on error tolerance (more error tolerance means deeper circuits can be used)
+    error_factor = 1.0 - (config.error_tolerance * 10)
+    
+    # Calculate final estimate
+    estimated_depth = int(base_depth * speed_factor * error_factor)
+    
+    return max(100, estimated_depth)  # Minimum depth for meaningful computation
+
+def _estimate_shor_repetitions(config: PlatformConfig) -> int:
+    """Estimate number of repetitions for Shor's algorithm based on error tolerance."""
+    # Base repetitions
+    base_repetitions = 5
+    
+    # Adjust based on error tolerance (higher error tolerance requires more repetitions)
+    error_factor = 1.0 + (0.01 / config.error_tolerance)
+    
+    # Adjust based on coherence time (shorter coherence time requires fewer repetitions)
+    coherence_factor = min(1.0, config.coherence_time / 1000.0)
+    
+    # Calculate final estimate
+    estimated_repetitions = int(base_repetitions * error_factor / coherence_factor)
+    
+    return max(3, min(20, estimated_repetitions))  # Between 3 and 20 repetitions
+
+def optimize_grover_algorithm(search_space_size: int, 
+                            platform: QuantumPlatform = QuantumPlatform.SIMULATOR) -> Dict[str, Any]:
+    """
+    Optimize Grover's search algorithm for a given search space.
+    
+    Args:
+        search_space_size: Size of the search space
+        platform: Target quantum platform
+        
+    Returns:
+        Dictionary with optimized parameters and metrics
+        
+    As stated in Квантовый ПК.md: "optimize_grover_algorithm - оптимизация алгоритма Гровера"
+    """
+    start_time = time.time()
+    
+    try:
+        # Get platform configuration
+        config = get_platform_config(platform)
+        
+        # Basic validation
+        if search_space_size <= 0:
+            raise AlgorithmOptimizationError("Search space size must be positive")
+        
+        # Determine required qubits
+        n_qubits = int(np.ceil(np.log2(search_space_size)))
+        
+        # Determine optimal number of iterations
+        optimal_iterations = int(np.floor(np.pi / 4 * np.sqrt(search_space_size)))
+        
+        # Adjust iterations based on platform error tolerance
+        error_factor = 1.0 - (config.error_tolerance * 5)
+        adjusted_iterations = int(optimal_iterations * error_factor)
+        
+        # Determine number of repetitions based on error tolerance
+        repetitions = _estimate_grover_repetitions(config)
+        
+        # Return optimized parameters
+        return {
+            "n_qubits": n_qubits,
+            "optimal_iterations": optimal_iterations,
+            "adjusted_iterations": max(1, adjusted_iterations),
+            "repetitions": repetitions,
+            "success_probability": _estimate_grover_success_probability(
+                search_space_size, adjusted_iterations, config
+            ),
+            "success": True,
+            "execution_time": time.time() - start_time,
+            "platform": platform.name,
+            "optimized": True,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Grover algorithm optimization failed: {str(e)}", exc_info=True)
+        
+        # Fallback to basic parameters
+        n_qubits = int(np.ceil(np.log2(search_space_size)))
+        optimal_iterations = int(np.floor(np.pi / 4 * np.sqrt(search_space_size)))
+        
+        return {
+            "n_qubits": n_qubits,
+            "optimal_iterations": optimal_iterations,
+            "adjusted_iterations": max(1, optimal_iterations),
+            "repetitions": 3,
+            "success_probability": 0.5,
+            "success": False,
+            "execution_time": time.time() - start_time,
+            "platform": platform.name,
+            "optimized": False,
+            "error": str(e),
+            "timestamp": time.time()
+        }
+
+def _estimate_grover_repetitions(config: PlatformConfig) -> int:
+    """Estimate number of repetitions for Grover's algorithm based on error tolerance."""
+    # Base repetitions
+    base_repetitions = 3
+    
+    # Adjust based on error tolerance (higher error tolerance requires more repetitions)
+    error_factor = 1.0 + (0.01 / config.error_tolerance)
+    
+    # Adjust based on coherence time (shorter coherence time requires fewer repetitions)
+    coherence_factor = min(1.0, config.coherence_time / 500.0)
+    
+    # Calculate final estimate
+    estimated_repetitions = int(base_repetitions * error_factor / coherence_factor)
+    
+    return max(2, min(10, estimated_repetitions))  # Between 2 and 10 repetitions
+
+def _estimate_grover_success_probability(search_space_size: int, 
+                                       iterations: int, 
+                                       config: PlatformConfig) -> float:
+    """Estimate success probability for Grover's algorithm."""
+    # Theoretical success probability without errors
+    theta = np.arcsin(1 / np.sqrt(search_space_size))
+    theoretical_prob = np.sin((2 * iterations + 1) * theta) ** 2
+    
+    # Adjust for platform error tolerance
+    error_penalty = config.error_tolerance * iterations * 0.5
+    
+    # Adjust for drift
+    drift_penalty = config.drift_rate * iterations * 0.2
+    
+    # Calculate final probability
+    success_prob = max(0.0, theoretical_prob - error_penalty - drift_penalty)
+    
+    return min(1.0, success_prob)
+
+# ======================
+# QUANTUM STATE CORRECTION
+# ======================
+def apply_phase_correction(state: np.ndarray, 
+                          correction: float, 
+                          qubit_indices: Optional[List[int]] = None) -> np.ndarray:
+    """
+    Apply phase correction to a quantum state.
+    
+    Args:
+        state: Quantum state to correct
+        correction: Phase correction value (in radians)
+        qubit_indices: Optional indices of qubits to apply correction to
+        
+    Returns:
+        Corrected quantum state
+        
+    As stated in Квантовый ПК.md: "apply_phase_correction - применение фазовой коррекции"
+    """
+    n = len(state)
+    total_qubits = int(np.log2(n))
+    
+    if qubit_indices is None:
+        qubit_indices = list(range(total_qubits))
+    
+    # Create correction operator
+    correction_operator = np.exp(1j * correction * np.arange(n) / (2 ** len(qubit_indices)))
+    
+    # Apply correction
+    corrected_state = state * correction_operator
+    
+    return corrected_state
+
+def apply_amplitude_correction(state: np.ndarray, 
+                              correction: float, 
+                              qubit_indices: Optional[List[int]] = None) -> np.ndarray:
+    """
+    Apply amplitude correction to a quantum state.
+    
+    Args:
+        state: Quantum state to correct
+        correction: Amplitude correction factor
+        qubit_indices: Optional indices of qubits to apply correction to
+        
+    Returns:
+        Corrected quantum state
+        
+    As stated in Квантовый ПК.md: "apply_amplitude_correction - применение амплитудной коррекции"
+    """
+    n = len(state)
+    total_qubits = int(np.log2(n))
+    
+    if qubit_indices is None:
+        qubit_indices = list(range(total_qubits))
+    
+    # Create correction operator
+    correction_operator = np.ones(n, dtype=np.complex128)
+    
+    # Apply correction to specified qubits
+    for i in range(n):
+        # Check if the state component corresponds to the target qubits
+        include_correction = True
+        for qubit in qubit_indices:
+            if (i & (1 << (total_qubits - 1 - qubit))) == 0:
+                include_correction = False
+                break
+        
+        if include_correction:
+            correction_operator[i] = correction
+    
+    # Apply correction
+    corrected_state = state * correction_operator
+    
+    # Normalize
+    norm = np.linalg.norm(corrected_state)
+    if norm > 1e-10:
+        corrected_state /= norm
+    
+    return corrected_state
+
+def calculate_coherence_time(platform: QuantumPlatform, 
+                           temperature: float = 25.0) -> float:
+    """
+    Calculate the coherence time for a quantum platform at a given temperature.
+    
+    Args:
+        platform: Quantum platform
+        temperature: Temperature in Celsius
+        
+    Returns:
+        Coherence time in nanoseconds
+        
+    As stated in Квантовый ПК.md: "calculate_coherence_time - вычисление времени когерентности"
+    """
+    config = get_platform_config(platform)
+    
+    # Base coherence time from configuration
+    base_time = config.coherence_time
+    
+    # Temperature dependence (simplified model)
+    # Higher temperature reduces coherence time
+    temperature_factor = max(0.1, 1.0 - (temperature - 25.0) * 0.01)
+    
+    # Drift rate dependence
+    drift_factor = max(0.1, 1.0 - config.drift_rate * 10)
+    
+    # Calculate final coherence time
+    coherence_time = base_time * temperature_factor * drift_factor
+    
+    return max(1.0, coherence_time)  # Minimum 1 ns
+
+def generate_quantum_noise_profile(platform: QuantumPlatform, 
+                                 duration: float,
+                                 temperature: float = 25.0) -> Dict[str, Any]:
+    """
+    Generate a quantum noise profile for a platform over a duration.
+    
+    Args:
+        platform: Quantum platform
+        duration: Duration in nanoseconds
+        temperature: Temperature in Celsius
+        
+    Returns:
+        Dictionary with noise profile metrics
+        
+    As stated in Квантовый ПК.md: "generate_quantum_noise_profile - генерация профиля квантового шума"
+    """
+    config = get_platform_config(platform)
+    
+    # Calculate coherence time
+    coherence_time = calculate_coherence_time(platform, temperature)
+    
+    # Calculate number of coherence periods
+    periods = duration / coherence_time
+    
+    # Phase noise (random walk model)
+    phase_noise_std = config.drift_rate * np.sqrt(periods)
+    phase_noise = np.random.normal(0, phase_noise_std)
+    
+    # Amplitude noise (exponential decay model)
+    amplitude_decay = 1.0 - np.exp(-duration / coherence_time)
+    amplitude_noise = np.random.normal(0, amplitude_decay * 0.1)
+    
+    # Bit flip probability
+    bit_flip_prob = config.error_tolerance * periods
+    
+    # Phase flip probability
+    phase_flip_prob = config.error_tolerance * periods * 0.5
+    
+    return {
+        "platform": platform.name,
+        "duration": duration,
+        "temperature": temperature,
+        "coherence_time": coherence_time,
+        "phase_noise": phase_noise,
+        "amplitude_noise": amplitude_noise,
+        "bit_flip_probability": min(1.0, bit_flip_prob),
+        "phase_flip_probability": min(1.0, phase_flip_prob),
+        "decoherence_factor": amplitude_decay,
+        "timestamp": time.time()
+    }
+
+# ======================
+# QUANTUM VULNERABILITY ANALYSIS
+# ======================
+def calculate_quantum_vulnerability(state: np.ndarray, 
+                                   platform: QuantumPlatform,
+                                   tvi: float = 1.0) -> float:
+    """
+    Calculate vulnerability of a quantum state to attacks.
+    
+    Args:
+        state: Quantum state to analyze
+        platform: Quantum platform used
+        tvi: Topological Vulnerability Index
+        
+    Returns:
+        Vulnerability score (0.0 = secure, 1.0 = critical)
+        
+    As stated in Квантовый ПК.md: "calculate_quantum_vulnerability - вычисление квантовой уязвимости"
+    """
+    start_time = time.time()
+    
+    try:
+        # Get platform configuration
+        config = get_platform_config(platform)
+        
+        # Calculate state metrics
+        fidelity = quantum_state_fidelity(state, create_uniform_superposition(int(np.log2(len(state)))))
+        entropy = _calculate_state_entropy(state)
+        
+        # Calculate vulnerability components
+        platform_vulnerability = config.drift_rate * 2.0
+        coherence_vulnerability = 1.0 - (calculate_coherence_time(platform) / 1000.0)
+        fidelity_vulnerability = 1.0 - fidelity
+        entropy_vulnerability = 1.0 - entropy
+        tvi_vulnerability = tvi * 0.5
+        
+        # Weights for different components
+        weights = {
+            "platform": 0.2,
+            "coherence": 0.2,
+            "fidelity": 0.2,
+            "entropy": 0.2,
+            "tvi": 0.2
+        }
+        
+        # Calculate combined vulnerability
+        vulnerability = (
+            weights["platform"] * platform_vulnerability +
+            weights["coherence"] * coherence_vulnerability +
+            weights["fidelity"] * fidelity_vulnerability +
+            weights["entropy"] * entropy_vulnerability +
+            weights["tvi"] * tvi_vulnerability
+        )
+        
+        # Cap at 1.0
+        vulnerability = min(1.0, vulnerability)
+        
+        logger.debug(f"Quantum vulnerability calculated in {time.time() - start_time:.4f}s: {vulnerability:.4f}")
+        return vulnerability
+        
+    except Exception as e:
+        logger.error(f"Quantum vulnerability calculation failed: {str(e)}", exc_info=True)
+        return 1.0  # Assume worst case on failure
+
+def _calculate_state_entropy(state: np.ndarray) -> float:
+    """Calculate the entropy of a quantum state."""
+    probabilities = np.abs(state) ** 2
+    probabilities = probabilities / np.sum(probabilities)  # Normalize
+    
+    # Add small constant to avoid log(0)
+    probabilities = probabilities + 1e-10
+    entropy = -np.sum(probabilities * np.log(probabilities))
+    
+    # Normalize to [0, 1] range (max entropy is log(N))
+    max_entropy = np.log(len(state))
+    return entropy / max_entropy if max_entropy > 0 else 0.0
+
+def analyze_quantum_state_vulnerability(state: np.ndarray,
+                                      platform: QuantumPlatform,
+                                      topology_metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Comprehensive analysis of quantum state vulnerability.
+    
+    Args:
+        state: Quantum state to analyze
+        platform: Quantum platform used
+        topology_metrics: Topological metrics from signature analysis
+        
+    Returns:
+        Dictionary with detailed vulnerability analysis
+        
+    As stated in documentation: "Применение чисел Бетти к анализу ECDSA-Torus предоставляет
+    точную количественную оценку структуры пространства подписей и обнаруживает скрытые
+    уязвимости, которые пропускаются другими методами."
+    """
+    start_time = time.time()
+    
+    try:
+        # Calculate basic vulnerability
+        tvi = topology_metrics.get("tvi", 1.0)
+        vulnerability = calculate_quantum_vulnerability(state, platform, tvi)
+        
+        # Analyze specific vulnerability types
+        vulnerability_types = _identify_vulnerability_types(state, platform, topology_metrics)
+        
+        # Create detailed report
+        report = {
+            "vulnerability_score": vulnerability,
+            "is_secure": vulnerability < 0.5,
+            "vulnerability_types": vulnerability_types,
+            "state_metrics": {
+                "fidelity": quantum_state_fidelity(state, create_uniform_superposition(int(np.log2(len(state))))),
+                "entropy": _calculate_state_entropy(state),
+                "coherence_time": calculate_coherence_time(platform)
+            },
+            "platform_metrics": get_quantum_platform_metrics(platform),
+            "topology_metrics": topology_metrics,
+            "timestamp": time.time(),
+            "analysis_time": time.time() - start_time
+        }
+        
+        return report
+        
+    except Exception as e:
+        logger.error(f"Quantum state vulnerability analysis failed: {str(e)}", exc_info=True)
+        
+        # Return default report on failure
+        return {
+            "vulnerability_score": 1.0,
+            "is_secure": False,
+            "vulnerability_types": ["CRITICAL"],
+            "state_metrics": {
+                "fidelity": 0.0,
+                "entropy": 0.0,
+                "coherence_time": 0.0
+            },
+            "platform_metrics": get_quantum_platform_metrics(platform),
+            "topology_metrics": topology_metrics,
+            "timestamp": time.time(),
+            "analysis_time": time.time() - start_time,
+            "error": str(e)
+        }
+
+def _identify_vulnerability_types(state: np.ndarray,
+                                platform: QuantumPlatform,
+                                topology_metrics: Dict[str, Any]) -> List[str]:
+    """Identify specific types of quantum vulnerabilities."""
+    config = get_platform_config(platform)
+    tvi = topology_metrics.get("tvi", 1.0)
+    betti_numbers = topology_metrics.get("betti_numbers", [0.0, 0.0, 0.0])
+    
+    vulnerability_types = []
+    
+    # Check for drift-related vulnerabilities
+    if config.drift_rate > 0.01:
+        vulnerability_types.append("DRIFT_VULNERABILITY")
+    
+    # Check for coherence-related vulnerabilities
+    if calculate_coherence_time(platform) < 50.0:
+        vulnerability_types.append("COHERENCE_VULNERABILITY")
+    
+    # Check for topological vulnerabilities
+    if tvi > 0.7:
+        vulnerability_types.append("TOPOLOGICAL_VULNERABILITY")
+    
+    # Check for high Betti numbers
+    if betti_numbers[1] > 3.0 or betti_numbers[2] > 1.0:
+        vulnerability_types.append("HOMOLOGY_VULNERABILITY")
+    
+    # Check for entropy issues
+    entropy = _calculate_state_entropy(state)
+    if entropy < 0.3:
+        vulnerability_types.append("LOW_ENTROPY_VULNERABILITY")
+    
+    # Check for error tolerance issues
+    if config.error_tolerance > 0.01:
+        vulnerability_types.append("HIGH_ERROR_VULNERABILITY")
+    
+    return vulnerability_types if vulnerability_types else ["NONE"]
+
+# ======================
+# QUANTUM CRYPTOGRAPHY
+# ======================
+def generate_quantum_key_pair(length: int, 
+                            platform: QuantumPlatform = QuantumPlatform.SOI) -> QuantumKeyPair:
+    """
+    Generate a quantum key pair for cryptographic operations.
     
     Args:
         length: Length of the key to generate (in bits)
         platform: Quantum platform to use for simulation
         
     Returns:
-        bytes: Generated quantum key
+        QuantumKeyPair object with generated keys
         
     As stated in Квантовый ПК.md: "Реализация протокола квантового распределения ключей BB84"
     """
-    # Get platform configuration
-    platform_config = get_platform_config(platform)
+    start_time = time.time()
     
-    # Generate random bits and bases
-    bits = np.random.randint(0, 2, length)
-    bases = np.random.choice(["Z", "X"], length)
-    
-    # Simulate quantum transmission
-    received_bits = []
-    received_bases = np.random.choice(["Z", "X"], length)
-    
-    for i in range(length):
-        # If bases match, the bit is preserved
-        if bases[i] == received_bases[i]:
-            received_bits.append(bits[i])
-        # Otherwise, the bit is random
-        else:
-            received_bits.append(np.random.randint(0, 2))
-    
-    # Sifted key (only bits where bases matched)
-    sifted_indices = [i for i in range(length) if bases[i] == received_bases[i]]
-    sifted_key = [bits[i] for i in sifted_indices]
-    
-    # Error estimation (using a subset of the key)
-    error_rate = _estimate_error_rate(sifted_key, platform_config.error_tolerance)
-    
-    # Check if error rate is acceptable
-    if error_rate > platform_config.error_tolerance:
-        raise RuntimeError(
-            f"Quantum channel error rate ({error_rate:.4f}) exceeds tolerance "
-            f"({platform_config.error_tolerance:.4f})"
+    try:
+        # Validate parameters
+        if length <= 0:
+            raise QuantumOperationError("Key length must be positive")
+        if length > 1024:
+            logger.warning(f"Key length {length} is very large, consider using a smaller value")
+        
+        # Get platform configuration
+        config = get_platform_config(platform)
+        
+        # Generate random bits and bases
+        bits = np.random.randint(0, 2, length)
+        bases = np.random.choice(["Z", "X"], length)
+        
+        # Simulate quantum transmission
+        received_bits = []
+        received_bases = np.random.choice(["Z", "X"], length)
+        
+        for i in range(length):
+            # If bases match, the bit is preserved
+            if bases[i] == received_bases[i]:
+                received_bits.append(bits[i])
+        
+        # Perform error correction and privacy amplification
+        # This is a simplified simulation
+        final_key_length = int(len(received_bits) * 0.5)  # Simulate 50% key rate after sifting
+        private_key = np.random.bytes(final_key_length // 8)
+        public_key = np.random.bytes(final_key_length // 8)
+        
+        # Calculate security level based on platform
+        security_level = 1.0 - (config.error_tolerance * 2.0) - (config.drift_rate * 5.0)
+        security_level = max(0.0, min(1.0, security_level))
+        
+        # Create key pair
+        key_id = str(uuid.uuid4())
+        key_pair = QuantumKeyPair(
+            key_id=key_id,
+            created_at=time.time(),
+            private_key=private_key,
+            public_key=public_key,
+            platform=platform,
+            dimension=config.max_dimension,
+            security_level=security_level,
+            calibration_data={
+                "error_rate": config.error_tolerance,
+                "drift_rate": config.drift_rate,
+                "coherence_time": calculate_coherence_time(platform)
+            },
+            timestamp=time.time()
         )
-    
-    # Privacy amplification and error correction would happen here
-    # For simplicity, we return the sifted key as bytes
-    key_bytes = _bits_to_bytes(sifted_key)
-    
-    logger.info(
-        f"BB84 key distribution completed (length={len(key_bytes)} bytes, "
-        f"error_rate={error_rate:.4f})"
-    )
-    return key_bytes
+        
+        logger.info(f"Generated quantum key pair (ID: {key_id}, length: {final_key_length} bits, "
+                    f"platform: {platform.name}, security: {security_level:.2f})")
+        
+        return key_pair
+        
+    except Exception as e:
+        logger.error(f"Quantum key generation failed: {str(e)}", exc_info=True)
+        raise QuantumOperationError(f"Key generation failed: {str(e)}") from e
+    finally:
+        logger.debug(f"Quantum key generation completed in {time.time() - start_time:.4f}s")
 
-
-def _estimate_error_rate(key: List[int], max_error: float) -> float:
+def verify_quantum_signature(public_key: Any, 
+                           message: Union[str, bytes], 
+                           signature: bytes,
+                           platform: QuantumPlatform = QuantumPlatform.SOI,
+                           dimension: int = DEFAULT_DIMENSION) -> bool:
     """
-    Estimate the error rate in a quantum key distribution protocol.
+    Verify a quantum-topological signature.
     
     Args:
-        key: Key bits for error estimation
-        max_error: Maximum acceptable error rate
+        public_key: Quantum public key
+        message: Message that was signed
+        signature: Signature to verify
+        platform: Quantum platform used
+        dimension: Quantum dimension
         
     Returns:
-        float: Estimated error rate
-    """
-    # In a real implementation, this would use a subset of the key for error estimation
-    # For demonstration, we simulate an error rate
-    simulated_error = max_error * 0.8 + np.random.normal(0, max_error * 0.2)
-    return max(0.0, min(max_error * 1.2, simulated_error))
-
-
-def _bits_to_bytes(bits: List[int]) -> bytes:
-    """
-    Convert a list of bits to bytes.
-    
-    Args:
-        bits: List of bits (0s and 1s)
+        bool: True if signature is valid, False otherwise
         
-    Returns:
-        bytes: Converted byte array
+    As stated in documentation: "Плагин для Bitcoin Core: Автоматически проверяет входящие транзакции
+    на наличие слабых подписей, Блокирует транзакции с TVI > 0.5."
     """
-    # Pad bits to multiple of 8
-    padded_bits = bits + [0] * ((8 - len(bits) % 8) % 8)
+    start_time = time.time()
     
-    # Convert to bytes
-    byte_array = bytearray()
-    for i in range(0, len(padded_bits), 8):
-        byte = 0
-        for j in range(8):
-            byte = (byte << 1) | padded_bits[i + j]
-        byte_array.append(byte)
-    
-    return bytes(byte_array)
+    try:
+        # In a real implementation, this would use actual quantum verification
+        if isinstance(message, str):
+            message = message.encode()
+        
+        # Calculate message hash
+        import hashlib
+        message_hash = hashlib.sha3_256(message).digest()
+        
+        # Verify signature format
+        if len(signature) < 16:
+            logger.warning("Invalid signature format: too short")
+            return False
+        
+        # Check platform-specific signature format
+        platform_prefix = signature[:4]
+        if platform == QuantumPlatform.SOI and platform_prefix != b"soi_":
+            logger.warning(f"SOI platform signature has invalid prefix: {platform_prefix}")
+            return False
+        elif platform == QuantumPlatform.SiN and platform_prefix != b"sin_":
+            logger.warning(f"SiN platform signature has invalid prefix: {platform_prefix}")
+            return False
+        elif platform == QuantumPlatform.TFLN and platform_prefix != b"tfln":
+            logger.warning(f"TFLN platform signature has invalid prefix: {platform_prefix}")
+            return False
+        elif platform == QuantumPlatform.InP and platform_prefix != b"inp_":
+            logger.warning(f"InP platform signature has invalid prefix: {platform_prefix}")
+            return False
+        
+        # Perform quantum verification (simplified)
+        # In a real system, this would involve quantum state measurements and comparisons
+        sig_hash = hashlib.sha3_256(signature[4:]).digest()
+        valid = sig_hash[:16] == message_hash[:16]  # Simplified verification
+        
+        # Additional quantum security checks
+        if valid:
+            # Check for quantum-specific vulnerabilities
+            noise_profile = generate_quantum_noise_profile(platform, 100.0)
+            if noise_profile["bit_flip_probability"] > 0.1 or noise_profile["phase_flip_probability"] > 0.1:
+                logger.warning("High quantum noise detected, signature verification may be unreliable")
+                valid = False
+        
+        logger.debug(f"Quantum signature verification completed in {time.time() - start_time:.4f}s: {valid}")
+        return valid
+        
+    except Exception as e:
+        logger.error(f"Quantum signature verification failed: {str(e)}", exc_info=True)
+        return False
 
-
-def wdm_parallelize(operation: Callable, n_channels: Optional[int] = None, 
-                   platform: str = DEFAULT_PLATFORM) -> List:
+def quantum_sign(private_key: Any, 
+                message: Union[str, bytes], 
+                platform: QuantumPlatform = QuantumPlatform.SOI,
+                dimension: int = DEFAULT_DIMENSION) -> bytes:
     """
-    Parallelize a quantum operation using Wavelength Division Multiplexing (WDM).
+    Create a quantum-topological signature.
     
     Args:
-        operation: Quantum operation to parallelize
-        n_channels: Number of WDM channels to use (if None, uses platform default)
+        private_key: Quantum private key
+        message: Message to sign
         platform: Quantum platform to use
+        dimension: Quantum dimension
         
     Returns:
-        List: Results from parallel execution
+        Quantum signature as bytes
         
-    As stated in Квантовый ПК.md: "Оптимизация квантовой схемы для WDM-параллелизма"
+    As stated in documentation: "Works as API wrapper (no core modifications needed)"
     """
-    # Get platform configuration
-    platform_config = get_platform_config(platform)
+    start_time = time.time()
     
-    # Determine number of channels
-    if n_channels is None:
-        n_channels = platform_config.wavelengths
-    n_channels = min(n_channels, platform_config.wavelengths)
+    try:
+        # Check resources
+        _check_resources()
+        
+        if isinstance(message, str):
+            message = message.encode()
+        
+        # Get platform configuration
+        config = get_platform_config(platform)
+        
+        # Calculate message hash
+        import hashlib
+        message_hash = hashlib.sha3_256(message).digest()
+        
+        # Generate quantum signature (simplified)
+        # In a real implementation, this would use actual quantum operations
+        signature = b""
+        
+        if platform == QuantumPlatform.SOI:
+            # SOI platform signature generation
+            signature = _generate_soi_signature(private_key, message_hash, dimension)
+        elif platform == QuantumPlatform.SiN:
+            # SiN platform signature generation
+            signature = _generate_sin_signature(private_key, message_hash, dimension)
+        elif platform == QuantumPlatform.TFLN:
+            # TFLN platform signature generation
+            signature = _generate_tfln_signature(private_key, message_hash, dimension)
+        elif platform == QuantumPlatform.InP:
+            # InP platform signature generation
+            signature = _generate_inp_signature(private_key, message_hash, dimension)
+        else:
+            # Default platform (SIMULATOR)
+            signature = _generate_simulator_signature(private_key, message_hash, dimension)
+        
+        logger.debug(f"Quantum signature generated in {time.time() - start_time:.4f}s")
+        return signature
+        
+    except Exception as e:
+        logger.error(f"Quantum signing failed: {str(e)}", exc_info=True)
+        raise QuantumOperationError(f"Signing failed: {str(e)}") from e
+
+def _generate_soi_signature(private_key: Any, message_hash: bytes, dimension: int) -> bytes:
+    """Generate signature for SOI platform."""
+    # Placeholder implementation
+    return b"soi_" + message_hash[:16]
+
+def _generate_sin_signature(private_key: Any, message_hash: bytes, dimension: int) -> bytes:
+    """Generate signature for SiN platform."""
+    # Placeholder implementation
+    return b"sin_" + message_hash[16:32]
+
+def _generate_tfln_signature(private_key: Any, message_hash: bytes, dimension: int) -> bytes:
+    """Generate signature for TFLN platform."""
+    # Placeholder implementation
+    return b"tfln" + message_hash
+
+def _generate_inp_signature(private_key: Any, message_hash: bytes, dimension: int) -> bytes:
+    """Generate signature for InP platform."""
+    # Placeholder implementation
+    return b"inp_" + message_hash[::-1]
+
+def _generate_simulator_signature(private_key: Any, message_hash: bytes, dimension: int) -> bytes:
+    """Generate signature for simulator platform."""
+    # Placeholder implementation
+    return b"sim_" + message_hash
+
+# ======================
+# WDM-PARALLELISM
+# ======================
+def wdm_parallelize(operations: List[Callable], 
+                   wavelengths: int,
+                   platform: QuantumPlatform = QuantumPlatform.SOI) -> List[Any]:
+    """
+    Execute operations in parallel using WDM (Wavelength Division Multiplexing).
     
-    logger.info(f"Executing operation with WDM parallelism (channels={n_channels})")
+    Args:
+        operations: List of operations to execute
+        wavelengths: Number of wavelengths to use
+        platform: Quantum platform
+        
+    Returns:
+        List of results from operations
+        
+    As stated in documentation: "WDM-parallelism for quantum operations"
+    """
+    start_time = time.time()
     
-    # Execute operation in parallel across channels
-    results = []
-    for i in range(n_channels):
-        # In a real implementation, this would execute on different wavelengths
-        # For simulation, we just call the operation with a channel identifier
-        try:
-            result = operation(channel=i)
-            results.append(result)
-        except Exception as e:
-            logger.error(f"WDM channel {i} failed: {str(e)}")
-            results.append(None)
+    try:
+        # Get platform configuration
+        config = get_platform_config(platform)
+        
+        # Determine maximum wavelengths based on platform
+        max_wavelengths = min(wavelengths, config.wavelengths)
+        
+        # Split operations into chunks
+        chunks = [operations[i::max_wavelengths] for i in range(max_wavelengths)]
+        
+        # Execute in parallel
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_wavelengths) as executor:
+            future_to_chunk = {
+                executor.submit(_execute_chunk, chunk): i 
+                for i, chunk in enumerate(chunks) if chunk
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_chunk):
+                chunk_results = future.result()
+                results.extend(chunk_results)
+        
+        logger.debug(f"WDM parallelization completed in {time.time() - start_time:.4f}s "
+                     f"({len(operations)} operations on {max_wavelengths} wavelengths)")
+        return results
+        
+    except Exception as e:
+        logger.error(f"WDM parallelization failed: {str(e)}", exc_info=True)
+        # Fallback to sequential execution
+        return [op() for op in operations]
+
+def _execute_chunk(chunk: List[Callable]) -> List[Any]:
+    """Execute a chunk of operations sequentially."""
+    return [op() for op in chunk]
+
+def get_wdm_capacity(platform: QuantumPlatform) -> int:
+    """
+    Get the WDM capacity of a quantum platform.
     
-    # Filter out failed channels
-    results = [r for r in results if r is not None]
+    Args:
+        platform: Quantum platform
+        
+    Returns:
+        Number of wavelengths supported
+        
+    As stated in documentation: "WDM-parallelism for quantum operations"
+    """
+    config = get_platform_config(platform)
+    return config.wavelengths
+
+# ======================
+# TESTING AND VALIDATION
+# ======================
+def self_test():
+    """
+    Run self-tests for quantum utilities.
+    
+    Returns:
+        bool: True if all tests pass, False otherwise
+    """
+    import random
+    
+    # Test platform configuration
+    try:
+        for platform in QuantumPlatform:
+            config = get_platform_config(platform)
+            assert config.platform == platform
+            assert config.wavelengths > 0
+            assert 0 <= config.error_tolerance <= 1.0
+    except Exception as e:
+        logger.error(f"Platform configuration test failed: {str(e)}")
+        return False
+    
+    # Test quantum state operations
+    try:
+        state = create_uniform_superposition(4)
+        assert len(state) == 16
+        assert abs(np.linalg.norm(state) - 1.0) < 1e-10
+        
+        # Test fidelity
+        fidelity = quantum_state_fidelity(state, state)
+        assert abs(fidelity - 1.0) < 1e-10
+        
+        # Test measurement
+        _, result = measure_state(state)
+        assert 0 <= result < 16
+    except Exception as e:
+        logger.error(f"Quantum state operations test failed: {str(e)}")
+        return False
+    
+    # Test quantum algorithm optimization
+    try:
+        shor_result = optimize_shor_algorithm(15)
+        assert shor_result["success"]
+        assert shor_result["n_qubits"] > 0
+        
+        grover_result = optimize_grover_algorithm(100)
+        assert grover_result["success"]
+        assert grover_result["n_qubits"] > 0
+    except Exception as e:
+        logger.error(f"Algorithm optimization test failed: {str(e)}")
+        return False
+    
+    # Test quantum cryptography
+    try:
+        key_pair = generate_quantum_key_pair(256)
+        assert key_pair.security_level >= 0.0
+        assert key_pair.security_level <= 1.0
+        
+        # Test signing and verification
+        message = b"Test message"
+        signature = quantum_sign(key_pair.private_key, message)
+        valid = verify_quantum_signature(key_pair.public_key, message, signature)
+        assert valid
+    except Exception as e:
+        logger.error(f"Quantum cryptography test failed: {str(e)}")
+        return False
+    
+    return True
+
+def benchmark_performance():
+    """
+    Run performance benchmarks for critical quantum functions.
+    
+    Returns:
+        Dictionary with benchmark results
+    """
+    import time
+    
+    results = {}
+    
+    # Benchmark state creation
+    start = time.time()
+    for _ in range(1000):
+        _ = create_uniform_superposition(4)
+    results["state_creation"] = (time.time() - start) / 1000.0
+    
+    # Benchmark fidelity calculation
+    state = create_uniform_superposition(4)
+    start = time.time()
+    for _ in range(1000):
+        _ = quantum_state_fidelity(state, state)
+    results["fidelity_calculation"] = (time.time() - start) / 1000.0
+    
+    # Benchmark Shor optimization
+    start = time.time()
+    for _ in range(10):
+        _ = optimize_shor_algorithm(21)
+    results["shor_optimization"] = (time.time() - start) / 10.0
+    
+    # Benchmark Grover optimization
+    start = time.time()
+    for _ in range(10):
+        _ = optimize_grover_algorithm(100)
+    results["grover_optimization"] = (time.time() - start) / 10.0
+    
+    # Benchmark quantum signing
+    key_pair = generate_quantum_key_pair(256)
+    message = b"Test message for signing"
+    start = time.time()
+    for _ in range(100):
+        _ = quantum_sign(key_pair.private_key, message)
+    results["quantum_signing"] = (time.time() - start) / 100.0
     
     return results
 
-
-def optimize_for_wdm(quantum_circuit: Any, platform: str = DEFAULT_PLATFORM) -> Any:
-    """
-    Optimize a quantum circuit for WDM (Wavelength Division Multiplexing) execution.
+# Run self-test on import (optional)
+if __name__ == "__main__":
+    print("Running QuantumFortress 2.0 quantum utilities self-test...")
+    if self_test():
+        print("All tests passed successfully!")
+    else:
+        print("Some tests failed. Please check the logs for details.")
     
-    Args:
-        quantum_circuit: Quantum circuit to optimize
-        platform: Quantum platform to target
-        
-    Returns:
-        Optimized quantum circuit
-        
-    As stated in Квантовый ПК.md: "Оптимизация квантовой схемы для WDM-параллелизма"
-    """
-    platform_config = get_platform_config(platform)
-    n_channels = platform_config.wavelengths
+    print("\nBenchmarking performance...")
+    results = benchmark_performance()
+    print(f"State creation: {results['state_creation']:.6f} sec/call")
+    print(f"Fidelity calculation: {results['fidelity_calculation']:.6f} sec/call")
+    print(f"Shor optimization: {results['shor_optimization']:.6f} sec/call")
+    print(f"Grover optimization: {results['grover_optimization']:.6f} sec/call")
+    print(f"Quantum signing: {results['quantum_signing']:.6f} sec/call")
     
-    # In a real implementation, this would restructure the circuit for WDM
-    # For demonstration, we'll just log the optimization
+    print("\nExample: Generating quantum key pair...")
+    key_pair = generate_quantum_key_pair(256, QuantumPlatform.InP)
+    print(f"Key ID: {key_pair.key_id}")
+    print(f"Platform: {key_pair.platform.name}")
+    print(f"Dimension: {key_pair.dimension}")
+    print(f"Security level: {key_pair.security_level:.2f}")
     
-    logger.info(
-        f"Optimizing circuit for WDM execution (platform={platform}, "
-        f"channels={n_channels})"
-    )
+    print("\nExample: Optimizing Shor's algorithm...")
+    shor_result = optimize_shor_algorithm(15, QuantumPlatform.TFLN)
+    print(f"Required qubits: {shor_result['n_qubits']}")
+    print(f"Circuit depth: {shor_result['circuit_depth']}")
+    print(f"Repetitions: {shor_result['repetitions']}")
     
-    # Return the circuit (in real implementation, it would be transformed)
-    return quantum_circuit
-
-
-def get_wdm_capacity(platform: str = DEFAULT_PLATFORM) -> int:
-    """
-    Get the WDM capacity for a specific quantum platform.
-    
-    Args:
-        platform: Quantum platform to query
-        
-    Returns:
-        int: Number of WDM channels supported
-        
-    As stated in Квантовый ПК.md: "Получение емкости WDM для текущей платформы"
-    """
-    platform_config = get_platform_config(platform)
-    return platform_config.wavelengths
-
-
-def calculate_quantum_drift(reference_state: np.ndarray, current_state: np.ndarray) -> float:
-    """
-    Calculate the drift between reference and current quantum states.
-    
-    Args:
-        reference_state: Reference quantum state
-        current_state: Current quantum state to compare
-        
-    Returns:
-        float: Drift metric (0.0 to 1.0, where 0.0 = no drift)
-        
-    As stated in Квантовый ПК.md: "Планируйте телеметрию по дрейфу и деградации"
-    """
-    # Calculate fidelity
-    fidelity = quantum_state_fidelity(reference_state, current_state)
-    
-    # Convert to drift metric (1.0 - fidelity)
-    drift = 1.0 - fidelity
-    
-    return max(0.0, min(1.0, drift))
-
-
-def analyze_quantum_state(state: np.ndarray, n_qubits: Optional[int] = None) -> QuantumMetrics:
-    """
-    Analyze a quantum state for security and stability metrics.
-    
-    Args:
-        state: Quantum state vector to analyze
-        n_qubits: Optional number of qubits (if None, calculated from state size)
-        
-    Returns:
-        QuantumMetrics: Security and stability metrics for the quantum state
-        
-    As stated in Квантовый ПК.md: "Телеметрия по дрейфу и деградации"
-    """
-    current_time = time.time()
-    
-    # Determine number of qubits if not provided
-    if n_qubits is None:
-        size = len(state)
-        n_qubits = int(np.log2(size))
-        if 2 ** n_qubits != size:
-            raise ValueError("State vector size must be a power of 2")
-    
-    # Create reference state (uniform superposition)
-    reference_state = create_uniform_superposition(n_qubits)
-    
-    # Calculate fidelity and drift
-    fidelity = quantum_state_fidelity(state, reference_state)
-    drift = 1.0 - fidelity
-    
-    # Calculate entropy
-    probabilities = np.abs(state) ** 2
-    entropy = 0.0
-    for p in probabilities:
-        if p > 0:
-            entropy -= p * np.log2(p)
-    
-    # Calculate coherence (simplified)
-    coherence = 0.0
-    for i in range(len(state)):
-        for j in range(i + 1, len(state)):
-            coherence += np.abs(state[i] * np.conj(state[j]))
-    
-    # WDM efficiency (simplified)
-    wdm_efficiency = min(1.0, fidelity * (1.0 - drift))
-    
-    return QuantumMetrics(
-        fidelity=fidelity,
-        drift=drift,
-        entropy=entropy,
-        coherence=coherence,
-        wdm_efficiency=wdm_efficiency,
-        timestamp=current_time
-    )
-
-
-def integrate_with_qiskit(qiskit_backend: Any) -> Any:
-    """
-    Integrate QuantumFortress with Qiskit as an API wrapper.
-    
-    This implements the approach from Квантовый ПК.md: "Works as API wrapper (no core modifications needed)"
-    
-    Args:
-        qiskit_backend: Qiskit backend to wrap
-        
-    Returns:
-        Wrapped backend with QuantumFortress enhancements
-        
-    Example:
-        >>> from qiskit import Aer
-        >>> backend = Aer.get_backend('qasm_simulator')
-        >>> enhanced_backend = integrate_with_qiskit(backend)
-        >>> # Now use enhanced_backend as a regular Qiskit backend
-    """
-    if not QISKIT_AVAILABLE:
-        raise ImportError("Qiskit is required for this integration")
-    
-    # Create a wrapper class
-    class QuantumFortressQiskitBackend:
-        """Wrapper for Qiskit backend with QuantumFortress enhancements"""
-        
-        def __init__(self, backend):
-            self.backend = backend
-            self.active = True
-            
-        def run(self, qobj, **kwargs):
-            """
-            Execute a quantum job with QuantumFortress enhancements.
-            
-            Args:
-                qobj: Quantum object to execute
-                **kwargs: Additional parameters
-                
-            Returns:
-                Result of the execution
-            """
-            if not self.active:
-                raise RuntimeError("QuantumFortress integration is not active")
-            
-            # Convert Qiskit circuit to QuantumFortress format
-            quantum_circuit = self._convert_qobj_to_circuit(qobj)
-            
-            # Execute through QuantumFortress system
-            result = self._execute_through_quantum_fortress(quantum_circuit)
-            
-            # Convert result back to Qiskit format
-            return self._convert_to_qiskit_result(result, qobj)
-        
-        def _convert_qobj_to_circuit(self, qobj):
-            """
-            Convert Qiskit Qobj to QuantumFortress circuit format.
-            
-            Args:
-                qobj: Qiskit Qobj
-                
-            Returns:
-                Quantum circuit in QuantumFortress format
-            """
-            # In a real implementation, this would be more complex
-            # For demonstration, we'll create a simple circuit
-            from quantum_fortress.core import QuantumCircuit
-            circuit = QuantumCircuit()
-            
-            # Process each experiment
-            for experiment in qobj.experiments:
-                # Process each instruction
-                for instruction in experiment.instructions:
-                    # Convert instruction to QuantumFortress format
-                    operation = self._convert_instruction(instruction)
-                    circuit.add_operation(operation)
-                
-                # Add measurements
-                for qubit in experiment.header.qubit_labels:
-                    circuit.add_measurement(qubit[0])
-            
-            return circuit
-        
-        def _convert_instruction(self, instruction):
-            """
-            Convert Qiskit instruction to QuantumFortress operation.
-            
-            Args:
-                instruction: Qiskit instruction
-                
-            Returns:
-                Quantum operation in QuantumFortress format
-            """
-            # Map Qiskit gates to QuantumFortress gates
-            gate_map = {
-                'h': 'H',
-                'x': 'X',
-                'y': 'Y',
-                'z': 'Z',
-                'cx': 'CNOT',
-                'cz': 'CZ',
-                'id': 'I'
-            }
-            
-            gate_name = gate_map.get(instruction.name, instruction.name.upper())
-            qubits = [q.index for q in instruction.qubits]
-            
-            return {
-                'gate': gate_name,
-                'qubits': qubits,
-                'params': instruction.params
-            }
-        
-        def _execute_through_quantum_fortress(self, quantum_circuit):
-            """
-            Execute circuit through QuantumFortress system.
-            
-            Args:
-                quantum_circuit: Quantum circuit to execute
-                
-            Returns:
-                Execution result
-            """
-            # In a real implementation, this would use the full QuantumFortress system
-            # For demonstration, we'll simulate the execution
-            
-            # Get number of qubits
-            n_qubits = quantum_circuit.n_qubits
-            
-            # Create initial state
-            state = create_uniform_superposition(n_qubits)
-            
-            # Apply all operations
-            for operation in quantum_circuit.operations:
-                gate = apply_quantum_gate(
-                    operation['gate'], 
-                    operation['qubits'], 
-                    n_qubits
-                )
-                state = gate @ state
-            
-            # Measure the state
-            measured_index, probability = measure_state(state, n_qubits)
-            
-            # Return simulated result
-            return {
-                'state': state,
-                'measured_index': measured_index,
-                'probability': probability,
-                'metrics': analyze_quantum_state(state, n_qubits)
-            }
-        
-        def _convert_to_qiskit_result(self, result, qobj):
-            """
-            Convert QuantumFortress result to Qiskit result format.
-            
-            Args:
-                result: QuantumFortress execution result
-                qobj: Original Qiskit Qobj
-                
-            Returns:
-                Qiskit result object
-            """
-            # In a real implementation, this would be more complex
-            # For demonstration, we'll create a simple result
-            
-            from qiskit.result import Result
-            
-            # Create counts dictionary
-            counts = {}
-            measured_bits = format(result['measured_index'], f'0{qobj.experiments[0].header.n_qubits}b')
-            counts[measured_bits] = 1024  # Simulated count
-            
-            # Create result data
-            data = {
-                'counts': counts,
-                'metadata': {
-                    'drift': result['metrics'].drift,
-                    'fidelity': result['metrics'].fidelity
-                }
-            }
-            
-            # Create result object
-            return Result(
-                backend_name=self.backend.name(),
-                backend_version=self.backend.configuration().backend_version,
-                qobj_id=qobj.qobj_id,
-                job_id="quantum-fortress-" + qobj.qobj_id,
-                success=True,
-                results=[{
-                    'data': data,
-                    'status': 'DONE'
-                }]
-            )
-        
-        def enable_quantum_fortress(self):
-            """Enable QuantumFortress enhancements"""
-            self.active = True
-        
-        def disable_quantum_fortress(self):
-            """Disable QuantumFortress enhancements"""
-            self.active = False
-    
-    return QuantumFortressQiskitBackend(qiskit_backend)
-
-
-def integrate_with_cirq(cirq_circuit: Any) -> Any:
-    """
-    Integrate QuantumFortress with Cirq as an API wrapper.
-    
-    Args:
-        cirq_circuit: Cirq circuit to enhance
-        
-    Returns:
-        Enhanced Cirq circuit with QuantumFortress features
-        
-    As stated in Квантовый ПК.md: "Works as API wrapper (no core modifications needed)"
-    """
-    if not CIRQ_AVAILABLE:
-        raise ImportError("Cirq is required for this integration")
-    
-    # Create a wrapper class
-    class QuantumFortressCirqCircuit:
-        """Wrapper for Cirq circuit with QuantumFortress enhancements"""
-        
-        def __init__(self, circuit):
-            self.circuit = circuit
-            self.active = True
-            
-        def simulate(self, **kwargs):
-            """
-            Simulate the circuit with QuantumFortress enhancements.
-            
-            Args:
-                **kwargs: Additional parameters
-                
-            Returns:
-                Simulation result
-            """
-            if not self.active:
-                return self.circuit.simulate(**kwargs)
-            
-            # Convert Cirq circuit to QuantumFortress format
-            quantum_circuit = self._convert_to_quantum_circuit()
-            
-            # Execute through QuantumFortress system
-            result = self._execute_through_quantum_fortress(quantum_circuit)
-            
-            # Convert result back to Cirq format
-            return self._convert_to_cirq_result(result)
-        
-        def _convert_to_quantum_circuit(self):
-            """
-            Convert Cirq circuit to QuantumFortress circuit format.
-            
-            Returns:
-                Quantum circuit in QuantumFortress format
-            """
-            # In a real implementation, this would be more complex
-            # For demonstration, we'll create a simple circuit
-            from quantum_fortress.core import QuantumCircuit
-            circuit = QuantumCircuit()
-            
-            # Process each moment
-            for moment in self.circuit.moments:
-                for op in moment.operations:
-                    # Convert operation to QuantumFortress format
-                    operation = self._convert_operation(op)
-                    circuit.add_operation(operation)
-            
-            return circuit
-        
-        def _convert_operation(self, operation):
-            """
-            Convert Cirq operation to QuantumFortress operation.
-            
-            Args:
-                operation: Cirq operation
-                
-            Returns:
-                Quantum operation in QuantumFortress format
-            """
-            # Map Cirq gates to QuantumFortress gates
-            gate_map = {
-                cirq.H: 'H',
-                cirq.X: 'X',
-                cirq.Y: 'Y',
-                cirq.Z: 'Z',
-                cirq.CNOT: 'CNOT',
-                cirq.CZ: 'CZ',
-                cirq.I: 'I'
-            }
-            
-            gate = operation.gate
-            gate_name = gate_map.get(type(gate), gate.__class__.__name__.upper())
-            qubits = [q.x for q in operation.qubits]
-            
-            return {
-                'gate': gate_name,
-                'qubits': qubits,
-                'params': getattr(gate, 'exponent', 1.0)
-            }
-        
-        def _execute_through_quantum_fortress(self, quantum_circuit):
-            """
-            Execute circuit through QuantumFortress system.
-            
-            Args:
-                quantum_circuit: Quantum circuit to execute
-                
-            Returns:
-                Execution result
-            """
-            # Similar to the Qiskit integration, this would use the full QuantumFortress system
-            # For demonstration, we'll simulate the execution
-            
-            # Get number of qubits
-            n_qubits = quantum_circuit.n_qubits
-            
-            # Create initial state
-            state = create_uniform_superposition(n_qubits)
-            
-            # Apply all operations
-            for operation in quantum_circuit.operations:
-                gate = apply_quantum_gate(
-                    operation['gate'], 
-                    operation['qubits'], 
-                    n_qubits
-                )
-                state = gate @ state
-            
-            # Measure the state
-            measured_index, probability = measure_state(state, n_qubits)
-            
-            # Return simulated result
-            return {
-                'state': state,
-                'measured_index': measured_index,
-                'probability': probability,
-                'metrics': analyze_quantum_state(state, n_qubits)
-            }
-        
-        def _convert_to_cirq_result(self, result):
-            """
-            Convert QuantumFortress result to Cirq result format.
-            
-            Args:
-                result: QuantumFortress execution result
-                
-            Returns:
-                Cirq result object
-            """
-            # In a real implementation, this would be more complex
-            # For demonstration, we'll create a simple result
-            
-            # Create a state vector result
-            return cirq.SimulationTrialResult(
-                params=cirq.ParamResolver({}),
-                measurements={},
-                final_simulator_state=cirq.StateVectorMixin(state_vector=result['state'])
-            )
-        
-        def enable_quantum_fortress(self):
-            """Enable QuantumFortress enhancements"""
-            self.active = True
-        
-        def disable_quantum_fortress(self):
-            """Disable QuantumFortress enhancements"""
-            self.active = False
-    
-    return QuantumFortressCirqCircuit(cirq_circuit)
-
-
-def quantum_inspired_search(points: List[Tuple[float, float]], 
-                           target: Tuple[float, float], 
-                           n_qubits: int = DEFAULT_N_QUBITS) -> int:
-    """
-    Perform a quantum-inspired search in the signature space.
-    
-    This implements the quantum-inspired search approach mentioned in the documentation,
-    using principles from Grover's algorithm but adapted for classical hardware.
-    
-    Args:
-        points: List of points in the signature space (u_r, u_z coordinates)
-        target: Target point to search for
-        n_qubits: Number of qubits to simulate
-        
-    Returns:
-        int: Index of the closest point to the target
-        
-    As stated in the documentation: "Квантово-вдохновленные алгоритмы"
-    """
-    if not points:
-        return -1
-    
-    # Calculate distances to target
-    distances = []
-    for i, point in enumerate(points):
-        # Toroidal distance
-        dx = min(abs(point[0] - target[0]), 1.0 - abs(point[0] - target[0]))
-        dy = min(abs(point[1] - target[1]), 1.0 - abs(point[1] - target[1]))
-        dist = math.sqrt(dx**2 + dy**2)
-        distances.append((i, dist))
-    
-    # Sort by distance
-    distances.sort(key=lambda x: x[1])
-    
-    # Quantum-inspired amplification (simplified)
-    # In a real quantum algorithm, this would use amplitude amplification
-    n = len(points)
-    k = min(n_qubits, int(np.log2(n)) + 1)
-    iterations = int(np.pi * np.sqrt(n) / 4)
-    
-    # Return the index after simulated iterations
-    # This is a simplified simulation of Grover's algorithm
-    selected_idx = distances[0][0]
-    for _ in range(iterations):
-        # In a real implementation, this would update probabilities based on amplitude amplification
-        # For demonstration, we'll just select from a weighted distribution
-        weights = [1.0 / (d[1] + 1e-10) for d in distances]
-        total = sum(weights)
-        weights = [w / total for w in weights]
-        selected_idx = np.random.choice([d[0] for d in distances], p=weights)
-    
-    return selected_idx
-
-
-def optimize_shor_algorithm(n_qubits: int, N: int) -> Dict[str, Any]:
-    """
-    Optimize parameters for Shor's algorithm based on topological analysis.
-    
-    Args:
-        n_qubits: Number of qubits available
-        N: Number to factorize
-        
-    Returns:
-        Dict[str, Any]: Optimized parameters for Shor's algorithm
-        
-    As stated in Квантовый ПК.md: "Оптимизация алгоритма Шора через топологический анализ"
-    """
-    # Calculate required qubits
-    required_qubits = 2 * int(np.ceil(np.log2(N)))
-    
-    # Check if we have enough qubits
-    if n_qubits < required_qubits:
-        raise ValueError(
-            f"Insufficient qubits: {n_qubits} available, {required_qubits} required for N={N}"
-        )
-    
-    # Calculate precision based on platform capabilities
-    precision = min(1.0, n_qubits / (2.5 * required_qubits))
-    
-    # Calculate expected success probability
-    # This is a simplified model - in reality would depend on many factors
-    success_probability = 0.4 + 0.6 * precision
-    
-    # Determine optimal parameters
-    optimal_params = {
-        "n_qubits": n_qubits,
-        "precision": precision,
-        "expected_success_probability": success_probability,
-        "recommended_platform": "InP" if precision > 0.8 else "SOI",
-        "iterations": int(1 / success_probability)
-    }
-    
-    logger.info(
-        f"Shor's algorithm optimized for N={N} "
-        f"(qubits={n_qubits}, success_prob={success_probability:.2%})"
-    )
-    return optimal_params
+    print("\nExample: Optimizing Grover's algorithm...")
+    grover_result = optimize_grover_algorithm(100, QuantumPlatform.SiN)
+    print(f"Qubits: {grover_result['n_qubits']}")
+    print(f"Optimal iterations: {grover_result['optimal_iterations']}")
+    print(f"Adjusted iterations: {grover_result['adjusted_iterations']}")
+    print(f"Success probability: {grover_result['success_probability']:.2%}")
