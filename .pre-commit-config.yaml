@@ -1,0 +1,219 @@
+# QuantumFortress 2.0 pre-commit configuration
+# Ensures code quality, security, and topological integrity before commits
+
+repos:
+  - repo: https://github.com/psf/black
+    rev: 23.10.1
+    hooks:
+      - id: black
+        name: "Black: Code Formatter"
+        description: "Formats Python code to comply with QuantumFortress style standards"
+        language_version: python3
+        args: [--line-length=100, --target-version=py39]
+        types: [python]
+        require_serial: true
+        verbose: true
+        additional_dependencies: []
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        name: "isort: Import Sorter"
+        description: "Sorts and sections imports according to QuantumFortress standards"
+        args: [--profile=black, --line-length=100, --filter-files]
+        types: [python]
+        require_serial: true
+        verbose: true
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        name: "flake8: Linter"
+        description: "Checks code for style violations and potential errors"
+        args: [--max-line-length=100, --ignore=E203,W503]
+        types: [python]
+        exclude: ^(docs|examples|tests|benchmarks)/
+        additional_dependencies:
+          - flake8-bugbear
+          - flake8-comprehensions
+          - flake8-docstrings
+          - flake8-typing-imports
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.7.0
+    hooks:
+      - id: mypy
+        name: "mypy: Type Checker"
+        description: "Verifies type annotations for QuantumFortress components"
+        args: [--ignore-missing-imports, --follow-imports=silent, --disallow-untyped-defs]
+        types: [python]
+        files: ^src/quantum_fortress/
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+          - numpy
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        name: "bandit: Security Scanner"
+        description: "Detects common security issues in QuantumFortress code"
+        args: [-r, src/quantum_fortress/, -c, .bandit.yml]
+        types: [python]
+        verbose: true
+        additional_dependencies:
+          - pyyaml
+
+  - repo: local
+    hooks:
+      - id: topological-vulnerability-check
+        name: "TVI: Topological Vulnerability Index"
+        description: "Analyzes code for topological security vulnerabilities"
+        entry: python scripts/tvi_analyzer.py
+        language: system
+        types: [python]
+        files: ^src/quantum_fortress/
+        pass_filenames: true
+        verbose: true
+        args: [--threshold=0.5]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: check-yaml
+        name: "YAML: Syntax Checker"
+        description: "Verifies YAML syntax for configuration files"
+        types: [yaml]
+
+      - id: check-json
+        name: "JSON: Syntax Checker"
+        description: "Verifies JSON syntax for data files"
+        types: [json]
+
+      - id: check-toml
+        name: "TOML: Syntax Checker"
+        description: "Verifies TOML syntax for configuration files"
+        types: [toml]
+
+      - id: check-added-large-files
+        name: "Large Files: Size Checker"
+        description: "Prevents committing large files to repository"
+        args: [--maxkb=500]
+
+      - id: trailing-whitespace
+        name: "Whitespace: Trailing Space Remover"
+        description: "Removes trailing whitespace from files"
+        args: [--markdown-linebreak-ext=md]
+
+      - id: end-of-file-fixer
+        name: "EOF: End of File Fixer"
+        description: "Ensures files end with a newline"
+        exclude: \.ipynb$
+
+      - id: mixed-line-ending
+        name: "Line Endings: Consistency Checker"
+        description: "Ensures consistent line endings across platform"
+        args: [--fix=lf]
+
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: v1.10.0
+    hooks:
+      - id: python-check-blanket-noqa
+        name: "Blanket noqa: Security Warning"
+        description: "Detects blanket noqa comments that suppress all warnings"
+        language: python
+
+      - id: python-check-mock-methods
+        name: "Mock Methods: Testing Warning"
+        description: "Detects incorrect use of mock methods in tests"
+        language: python
+
+      - id: rst-backticks
+        name: "RST: Backticks Checker"
+        description: "Ensures correct use of backticks in reStructuredText"
+        types: [rst]
+
+  - repo: local
+    hooks:
+      - id: quantum-topology-validator
+        name: "Quantum Topology: Structural Validator"
+        description: "Validates quantum-topological structures in code"
+        entry: python scripts/topology_validator.py
+        language: system
+        types: [python]
+        files: ^src/quantum_fortress/
+        pass_filenames: true
+        verbose: true
+        args: [--dimension=4, --max-tvi=0.5]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.9.0.6
+    hooks:
+      - id: shellcheck
+        name: "ShellCheck: Script Linter"
+        description: "Checks shell scripts for potential issues"
+        types: [shell]
+        args: [--severity=warning]
+
+  - repo: local
+    hooks:
+      - id: quantum-hypercube-integrity
+        name: "Quantum Hypercube: Integrity Checker"
+        description: "Verifies quantum hypercube implementation integrity"
+        entry: python scripts/hypercube_integrity.py
+        language: system
+        types: [python]
+        files: ^src/quantum_fortress/core/adaptive_hypercube\.py$
+        pass_filenames: true
+        verbose: true
+        args: [--min-dimension=4, --max-dimension=8]
+
+  - repo: local
+    hooks:
+      - id: wdm-parallelism-validator
+        name: "WDM Parallelism: Validator"
+        description: "Validates WDM parallelism implementation correctness"
+        entry: python scripts/wdm_validator.py
+        language: system
+        types: [python]
+        files: ^src/quantum_fortress/consensus/topo_nonce_v2\.py$
+        pass_filenames: true
+        verbose: true
+        args: [--min-speedup=4.0, --max-channels=8]
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.0.3
+    hooks:
+      - id: prettier
+        name: "Prettier: Documentation Formatter"
+        description: "Formats documentation files for consistency"
+        types: [markdown, html, css, javascript]
+        files: ^docs/
+        exclude: ^docs/_build/
+        args: [--prose-wrap=always]
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.6
+    hooks:
+      - id: codespell
+        name: "codespell: Spell Checker"
+        description: "Checks for common misspellings in code and documentation"
+        types: [text]
+        exclude: ^(venv|\.git|\.tox|\.eggs|\.idea)/
+        args: [-L, TODO, -i, 3]
+
+  - repo: local
+    hooks:
+      - id: migration-phase-validator
+        name: "Migration Phase: Validator"
+        description: "Validates correct implementation of migration phases"
+        entry: python scripts/migration_validator.py
+        language: system
+        types: [python]
+        files: ^src/quantum_fortress/core/hybrid_crypto\.py$
+        pass_filenames: true
+        verbose: true
+        args: [--phases=3, --tvi-threshold=0.5]
