@@ -14,10 +14,11 @@ Key features:
 - Drift monitoring with configurable thresholds
 - Adaptive calibration intervals based on system stability
 - Comprehensive telemetry for tracking system health
-- Automatic correction of quantum state anomalies
+- Self-learning history for improved calibration accuracy
 - Integration with topological vulnerability analysis
 
-As stated in the documentation: "Сильная сторона — параллелизм и пропускная способность; 
+As stated in Квантовый ПК.md: 
+"Сильная сторона — параллелизм и пропускная способность; 
 слабое место — дрейф и разрядность, которые лечатся калибровкой и грамотной архитектурой."
 ("The strength is parallelism and bandwidth; the weakness is drift and precision, 
 which are fixed by calibration and proper architecture.")
@@ -26,13 +27,11 @@ which are fixed by calibration and proper architecture.")
 import threading
 import time
 import logging
-from typing import Dict, List, Tuple, Optional, Callable, Any
-from dataclasses import dataclass
 import numpy as np
-
-from quantum_fortress.core.adaptive_hypercube import AdaptiveQuantumHypercube
-from quantum_fortress.topology.homology import HomologyAnalyzer
-from quantum_fortress.utils.topology_utils import calculate_topological_deviation
+from typing import Dict, List, Tuple, Optional, Callable
+from dataclasses import dataclass
+import math
+from collections import deque
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -46,6 +45,8 @@ CRITICAL_DRIFT_THRESHOLD = 0.15    # Drift level triggering critical alerts
 DEFAULT_DRIFT_MONITORING_INTERVAL = 10  # Seconds between drift checks
 MAX_HISTORY_LENGTH = 1000          # Maximum number of history entries to retain
 ADAPTIVE_CALIBRATION_FACTOR = 0.5  # Factor for adaptive interval adjustment
+SELF_LEARNING_WINDOW = 100         # Number of past calibrations for self-learning
+MIN_CALIBRATION_SUCCESS_RATE = 0.7 # Minimum success rate to consider system stable
 
 
 @dataclass
@@ -57,6 +58,9 @@ class DriftMetrics:
     avg_drift: float
     error_distribution: List[float]
     timestamp: float
+    tvi_before: float
+    tvi_after: float
+    calibration_duration: float
 
 
 @dataclass
@@ -65,9 +69,12 @@ class CalibrationEvent:
     timestamp: float
     drift_before: float
     drift_after: float
+    tvi_before: float
+    tvi_after: float
     corrections_applied: Dict[str, Any]
     duration: float
     success: bool
+    environment_conditions: Dict[str, float]
 
 
 @dataclass
@@ -82,6 +89,8 @@ class SystemStatus:
     calibration_count: int
     drift_events: int
     critical_events: int
+    success_rate: float
+    tvi: float
 
 
 class AutoCalibrationSystem:
@@ -95,6 +104,7 @@ class AutoCalibrationSystem:
     - Applies corrections when drift exceeds thresholds
     - Adapts calibration intervals based on system stability
     - Generates detailed telemetry for system health assessment
+    - Uses self-learning history to improve calibration accuracy
     
     The implementation follows the principles from Квантовый ПК.md:
     "Планируйте телеметрию по дрейфу и деградации. Авто-калибровка — обязательная часть рантайма."
@@ -108,7 +118,7 @@ class AutoCalibrationSystem:
         >>> print(f"Current drift: {report['current_drift']:.4f}")
     """
     
-    def __init__(self, hypercube: AdaptiveQuantumHypercube, 
+    def __init__(self, hypercube: 'AdaptiveQuantumHypercube', 
                  calibration_interval: float = DEFAULT_CALIBRATION_INTERVAL,
                  drift_monitoring_interval: float = DEFAULT_DRIFT_MONITORING_INTERVAL):
         """
@@ -143,14 +153,24 @@ class AutoCalibrationSystem:
         self.calibration_count = 0
         self.drift_events = 0
         self.critical_events = 0
+        self.successful_calibrations = 0
         
         # Initialize history
         self.drift_history: List[DriftMetrics] = []
-        self.correction_history: List[CalibrationEvent] = []
+        self.correction_history: List[CalibrationEvent] = deque(maxlen=MAX_HISTORY_LENGTH)
         
         # Configure thresholds
         self.drift_threshold = DRIFT_THRESHOLD
         self.critical_drift_threshold = CRITICAL_DRIFT_THRESHOLD
+        
+        # Self-learning parameters
+        self.performance_history = []
+        self.adaptive_interval_factor = 1.0
+        self.environment_factors = {
+            "temperature": 25.0,  # Default room temperature
+            "vibration": 0.0,
+            "electromagnetic_noise": 0.0
+        }
         
         logger.info(
             f"Initialized AutoCalibrationSystem (interval={calibration_interval}s, "
@@ -174,9 +194,9 @@ class AutoCalibrationSystem:
         self.active = True
         self.calibration_thread = threading.Thread(
             target=self._calibration_loop,
-            name="QuantumCalibrationThread"
+            name="QuantumCalibrationThread",
+            daemon=True
         )
-        self.calibration_thread.daemon = True
         self.calibration_thread.start()
         
         current_time = time.time()
@@ -218,25 +238,81 @@ class AutoCalibrationSystem:
         logger.debug("Calibration thread started")
         
         while self.active:
-            current_time = time.time()
-            
-            # Check if full calibration is needed
-            if current_time - self.last_calibration > self.calibration_interval:
-                self.run_calibration()
-                self.last_calibration = current_time
-                self.calibration_count += 1
-            
-            # Monitor for drift
-            if current_time - self.last_drift_check > self.drift_monitoring_interval:
-                self.monitor_drift()
-                self.last_drift_check = current_time
-            
-            # Short sleep to reduce CPU usage
-            time.sleep(1.0)
+            try:
+                self.check_and_calibrate()
+                time.sleep(1.0)  # Short sleep to reduce CPU usage
+            except Exception as e:
+                logger.error(f"Calibration loop error: {str(e)}")
+                time.sleep(5.0)  # Longer sleep after error
         
         logger.debug("Calibration thread exiting")
     
-    def run_calibration(self) -> Dict[str, Any]:
+    def check_and_calibrate(self) -> None:
+        """
+        Check if calibration is needed and perform it if necessary.
+        
+        This method:
+        1. Checks drift metrics
+        2. Determines if calibration is needed
+        3. Performs calibration if needed
+        4. Updates system status
+        
+        As stated in Квантовый ПК.md: "Планируйте телеметрию по дрейфу и деградации"
+        """
+        current_time = time.time()
+        
+        # Check if full calibration is needed
+        if current_time - self.last_calibration > self.calibration_interval:
+            if self._needs_immediate_calibration():
+                self._perform_calibration()
+                self.last_calibration = current_time
+                self.calibration_count += 1
+        
+        # Monitor for drift
+        if current_time - self.last_drift_check > self.drift_monitoring_interval:
+            self._monitor_drift()
+            self.last_drift_check = current_time
+    
+    def _needs_immediate_calibration(self) -> bool:
+        """
+        Determine if immediate calibration is needed.
+        
+        Returns:
+            bool: True if calibration should be performed immediately
+        
+        As stated in Квантовый ПК.md: "Система авто-калибровки как обязательная часть рантайма"
+        """
+        # Always calibrate if critical drift is detected
+        drift_metrics = self._analyze_drift()
+        if drift_metrics.current_drift > self.critical_drift_threshold:
+            logger.warning(
+                f"Immediate calibration needed due to critical drift: "
+                f"{drift_metrics.current_drift:.4f} > {self.critical_drift_threshold:.4f}"
+            )
+            return True
+        
+        # Check if TVI is too high
+        metrics = self.hypercube.get_current_metrics()
+        if metrics.tvi > 0.6:
+            logger.warning(
+                f"Immediate calibration needed due to high TVI: "
+                f"{metrics.tvi:.4f} > 0.6"
+            )
+            return True
+        
+        # Check recent calibration success rate
+        if self.calibration_count > 10:
+            success_rate = self.successful_calibrations / self.calibration_count
+            if success_rate < MIN_CALIBRATION_SUCCESS_RATE:
+                logger.warning(
+                    f"Immediate calibration needed due to low success rate: "
+                    f"{success_rate:.2%} < {MIN_CALIBRATION_SUCCESS_RATE:.0%}"
+                )
+                return True
+        
+        return False
+    
+    def _perform_calibration(self) -> Dict[str, Any]:
         """
         Execute a full calibration cycle.
         
@@ -245,6 +321,7 @@ class AutoCalibrationSystem:
         2. Analyzes current drift metrics
         3. Applies necessary corrections
         4. Records the calibration event
+        5. Updates system parameters based on results
         
         Returns:
             Dictionary with calibration results
@@ -255,6 +332,10 @@ class AutoCalibrationSystem:
         logger.info("Starting calibration cycle")
         
         try:
+            # Get current metrics before calibration
+            pre_metrics = self.hypercube.get_current_metrics()
+            pre_drift = self._analyze_drift().current_drift
+            
             # Generate reference states for calibration
             reference_states = self._generate_reference_states()
             
@@ -270,12 +351,22 @@ class AutoCalibrationSystem:
                     f"to {corrections.get('new_drift', drift_metrics.current_drift):.4f})"
                 )
             
+            # Get metrics after calibration
+            post_metrics = self.hypercube.get_current_metrics()
+            post_drift = self._analyze_drift().current_drift
+            
             # Record calibration event
             duration = time.time() - start_time
-            success = drift_metrics.current_drift <= self.drift_threshold
+            success = (post_drift < self.drift_threshold) and (post_metrics.tvi < pre_metrics.tvi)
+            
+            if success:
+                self.successful_calibrations += 1
+            
             self._record_calibration_event(
-                drift_metrics.current_drift,
-                corrections.get('new_drift', drift_metrics.current_drift) if corrections else drift_metrics.current_drift,
+                pre_drift,
+                post_drift,
+                pre_metrics.tvi,
+                post_metrics.tvi,
                 corrections,
                 duration,
                 success
@@ -284,10 +375,15 @@ class AutoCalibrationSystem:
             # Adjust calibration interval based on stability
             self._adjust_calibration_interval(drift_metrics.current_drift)
             
+            # Update self-learning parameters
+            self._update_self_learning_parameters(success, drift_metrics)
+            
             result = {
                 "success": success,
-                "drift_before": drift_metrics.current_drift,
-                "drift_after": corrections.get('new_drift', drift_metrics.current_drift) if corrections else drift_metrics.current_drift,
+                "drift_before": pre_drift,
+                "drift_after": post_drift,
+                "tvi_before": pre_metrics.tvi,
+                "tvi_after": post_metrics.tvi,
                 "corrections_applied": bool(corrections),
                 "duration": duration,
                 "timestamp": time.time()
@@ -295,7 +391,7 @@ class AutoCalibrationSystem:
             
             logger.info(
                 f"Calibration completed (success={success}, duration={duration:.2f}s, "
-                f"drift={result['drift_after']:.4f})"
+                f"drift={post_drift:.4f}, TVI={post_metrics.tvi:.4f})"
             )
             return result
             
@@ -332,7 +428,7 @@ class AutoCalibrationSystem:
         
         return states
     
-    def _analyze_drift(self, reference_states: List[np.ndarray]) -> DriftMetrics:
+    def _analyze_drift(self, reference_states: Optional[List[np.ndarray]] = None) -> DriftMetrics:
         """
         Analyze current drift against reference states.
         
@@ -343,8 +439,16 @@ class AutoCalibrationSystem:
             DriftMetrics object with current drift analysis
         """
         current_time = time.time()
-        deviations = []
         
+        # Get current metrics for TVI
+        metrics = self.hypercube.get_current_metrics()
+        
+        # If no reference states provided, generate them
+        if reference_states is None:
+            reference_states = self._generate_reference_states()
+        
+        # Analyze drift against each reference state
+        deviations = []
         for state in reference_states:
             # In a real implementation, we would compare current state to reference
             # For demonstration, we'll simulate drift based on time since last calibration
@@ -365,13 +469,16 @@ class AutoCalibrationSystem:
             max_drift=max_drift,
             avg_drift=avg_drift,
             error_distribution=deviations,
-            timestamp=current_time
+            timestamp=current_time,
+            tvi_before=metrics.tvi,
+            tvi_after=metrics.tvi,  # Will be updated after calibration
+            calibration_duration=0.0
         )
         self._record_drift_metrics(drift_metrics)
         
         return drift_metrics
     
-    def monitor_drift(self) -> DriftMetrics:
+    def _monitor_drift(self) -> DriftMetrics:
         """
         Monitor current drift without performing full calibration.
         
@@ -382,8 +489,7 @@ class AutoCalibrationSystem:
             
         As stated in documentation: "Планируйте телеметрию по дрейфу и деградации."
         """
-        reference_states = self._generate_reference_states()
-        drift_metrics = self._analyze_drift(reference_states)
+        drift_metrics = self._analyze_drift()
         
         # Check for critical drift
         if drift_metrics.current_drift > self.critical_drift_threshold:
@@ -437,7 +543,8 @@ class AutoCalibrationSystem:
             return {
                 "new_drift": new_drift,
                 "correction_magnitude": drift_metrics.current_drift - new_drift,
-                "duration": duration
+                "duration": duration,
+                "method": "state_renormalization"
             }
             
         except Exception as e:
@@ -459,6 +566,7 @@ class AutoCalibrationSystem:
             self.drift_history = self.drift_history[-MAX_HISTORY_LENGTH:]
     
     def _record_calibration_event(self, drift_before: float, drift_after: float, 
+                                 tvi_before: float, tvi_after: float,
                                  corrections: Dict[str, Any], duration: float, 
                                  success: bool) -> None:
         """
@@ -467,6 +575,8 @@ class AutoCalibrationSystem:
         Args:
             drift_before: Drift before calibration
             drift_after: Drift after calibration
+            tvi_before: TVI before calibration
+            tvi_after: TVI after calibration
             corrections: Corrections applied
             duration: Duration of calibration
             success: Whether calibration was successful
@@ -475,15 +585,14 @@ class AutoCalibrationSystem:
             timestamp=time.time(),
             drift_before=drift_before,
             drift_after=drift_after,
+            tvi_before=tvi_before,
+            tvi_after=tvi_after,
             corrections_applied=corrections,
             duration=duration,
-            success=success
+            success=success,
+            environment_conditions=self.environment_factors.copy()
         )
         self.correction_history.append(event)
-        
-        # Trim history if too long
-        if len(self.correction_history) > MAX_HISTORY_LENGTH:
-            self.correction_history = self.correction_history[-MAX_HISTORY_LENGTH:]
     
     def _adjust_calibration_interval(self, current_drift: float) -> None:
         """
@@ -498,7 +607,7 @@ class AutoCalibrationSystem:
         if current_drift < self.drift_threshold * 0.5:
             new_interval = min(
                 MAX_CALIBRATION_INTERVAL,
-                self.calibration_interval * (1.0 + ADAPTIVE_CALIBRATION_FACTOR)
+                self.calibration_interval * (1.0 + ADAPTIVE_CALIBRATION_FACTOR * self.adaptive_interval_factor)
             )
         # If drift is high but below threshold, keep current interval
         elif current_drift < self.drift_threshold:
@@ -507,7 +616,7 @@ class AutoCalibrationSystem:
         else:
             new_interval = max(
                 MIN_CALIBRATION_INTERVAL,
-                self.calibration_interval * (1.0 - ADAPTIVE_CALIBRATION_FACTOR)
+                self.calibration_interval * (1.0 - ADAPTIVE_CALIBRATION_FACTOR * self.adaptive_interval_factor)
             )
         
         # Only update if change is significant
@@ -517,6 +626,104 @@ class AutoCalibrationSystem:
                 f"(drift={current_drift:.4f})"
             )
             self.calibration_interval = new_interval
+    
+    def _update_self_learning_parameters(self, calibration_success: bool, drift_metrics: DriftMetrics) -> None:
+        """
+        Update self-learning parameters based on calibration results.
+        
+        This method uses historical data to improve future calibration accuracy.
+        
+        Args:
+            calibration_success: Whether the calibration was successful
+            drift_metrics: Drift metrics from the calibration
+        """
+        # Add to performance history
+        self.performance_history.append({
+            "success": calibration_success,
+            "drift_before": drift_metrics.current_drift,
+            "tvi_before": drift_metrics.tvi_before,
+            "environment": self.environment_factors.copy(),
+            "timestamp": time.time()
+        })
+        
+        # Trim history if too long
+        if len(self.performance_history) > SELF_LEARNING_WINDOW:
+            self.performance_history = self.performance_history[-SELF_LEARNING_WINDOW:]
+        
+        # Calculate success rate in recent history
+        recent_successes = [entry["success"] for entry in self.performance_history[-50:]]
+        success_rate = sum(recent_successes) / len(recent_successes) if recent_successes else 0.0
+        
+        # Adjust adaptive interval factor based on success rate
+        if success_rate > 0.9:
+            self.adaptive_interval_factor = max(0.5, self.adaptive_interval_factor * 0.9)
+        elif success_rate < 0.7:
+            self.adaptive_interval_factor = min(2.0, self.adaptive_interval_factor * 1.1)
+        
+        # Analyze environmental factors affecting calibration
+        if len(self.performance_history) >= 10:
+            self._analyze_environmental_impact()
+    
+    def _analyze_environmental_impact(self) -> None:
+        """
+        Analyze how environmental factors affect calibration success.
+        
+        This method identifies patterns in environmental data to improve future calibration.
+        """
+        # Collect data
+        temp_drift = []
+        vibration_drift = []
+        noise_drift = []
+        
+        for entry in self.performance_history:
+            temp_drift.append((entry["environment"]["temperature"], entry["drift_before"]))
+            vibration_drift.append((entry["environment"]["vibration"], entry["drift_before"]))
+            noise_drift.append((entry["environment"]["electromagnetic_noise"], entry["drift_before"]))
+        
+        # Calculate correlations (simplified)
+        temp_corr = self._calculate_correlation(temp_drift)
+        vibration_corr = self._calculate_correlation(vibration_drift)
+        noise_corr = self._calculate_correlation(noise_drift)
+        
+        # Update environmental sensitivity
+        self.environment_factors["temp_sensitivity"] = abs(temp_corr)
+        self.environment_factors["vibration_sensitivity"] = abs(vibration_corr)
+        self.environment_factors["noise_sensitivity"] = abs(noise_corr)
+        
+        # Adjust calibration parameters based on sensitivity
+        if abs(temp_corr) > 0.5:
+            logger.debug(f"High temperature sensitivity detected (correlation={temp_corr:.2f})")
+            # Could adjust calibration parameters here
+        
+        if abs(vibration_corr) > 0.5:
+            logger.debug(f"High vibration sensitivity detected (correlation={vibration_corr:.2f})")
+            # Could adjust calibration parameters here
+    
+    def _calculate_correlation(self, data: List[Tuple[float, float]]) -> float:
+        """
+        Calculate correlation coefficient between two variables.
+        
+        Args:
+            data: List of (x, y) pairs
+            
+        Returns:
+            Correlation coefficient (-1 to 1)
+        """
+        if len(data) < 2:
+            return 0.0
+        
+        xs, ys = zip(*data)
+        x_mean = np.mean(xs)
+        y_mean = np.mean(ys)
+        
+        numerator = sum((x - x_mean) * (y - y_mean) for x, y in data)
+        denominator_x = np.sqrt(sum((x - x_mean) ** 2 for x in xs))
+        denominator_y = np.sqrt(sum((y - y_mean) ** 2 for y in ys))
+        
+        if denominator_x == 0 or denominator_y == 0:
+            return 0.0
+        
+        return numerator / (denominator_x * denominator_y)
     
     def get_calibration_report(self) -> Dict[str, Any]:
         """
@@ -555,6 +762,7 @@ class AutoCalibrationSystem:
             "critical_drift_threshold": self.critical_drift_threshold,
             "active": self.active,
             "calibration_count": self.calibration_count,
+            "successful_calibrations": self.successful_calibrations,
             "drift_events": self.drift_events,
             "critical_events": self.critical_events,
             "time_since_last_calibration": current_time - self.last_calibration if self.last_calibration else None,
@@ -563,7 +771,9 @@ class AutoCalibrationSystem:
                     "timestamp": m.timestamp,
                     "current_drift": m.current_drift,
                     "max_drift": m.max_drift,
-                    "avg_drift": m.avg_drift
+                    "avg_drift": m.avg_drift,
+                    "tvi_before": m.tvi_before,
+                    "tvi_after": m.tvi_after
                 } for m in self.drift_history[-100:]  # Last 100 entries
             ],
             "correction_history": [
@@ -571,15 +781,27 @@ class AutoCalibrationSystem:
                     "timestamp": e.timestamp,
                     "drift_before": e.drift_before,
                     "drift_after": e.drift_after,
+                    "tvi_before": e.tvi_before,
+                    "tvi_after": e.tvi_after,
                     "duration": e.duration,
-                    "success": e.success
-                } for e in self.correction_history[-50:]  # Last 50 entries
+                    "success": e.success,
+                    "environment": e.environment_conditions
+                } for e in self.correction_history  # All entries (limited by deque)
             ],
             "drift_summary": drift_summary,
             "correction_summary": {
                 "total": correction_count,
                 "successful": successful_corrections,
                 "success_rate": successful_corrections / correction_count if correction_count > 0 else 1.0
+            },
+            "self_learning": {
+                "adaptive_interval_factor": self.adaptive_interval_factor,
+                "environmental_sensitivity": {
+                    "temperature": self.environment_factors.get("temp_sensitivity", 0.0),
+                    "vibration": self.environment_factors.get("vibration_sensitivity", 0.0),
+                    "electromagnetic_noise": self.environment_factors.get("noise_sensitivity", 0.0)
+                },
+                "performance_history_size": len(self.performance_history)
             }
         }
     
@@ -607,6 +829,15 @@ class AutoCalibrationSystem:
         else:
             status = "stable"
         
+        # Get current TVI
+        tvi = self.hypercube.get_current_metrics().tvi if hasattr(self.hypercube, 'get_current_metrics') else 1.0
+        
+        # Calculate success rate
+        success_rate = (
+            self.successful_calibrations / self.calibration_count 
+            if self.calibration_count > 0 else 1.0
+        )
+        
         return SystemStatus(
             status=status,
             drift=latest_drift,
@@ -616,7 +847,9 @@ class AutoCalibrationSystem:
             time_since_calibration=current_time - self.last_calibration if self.last_calibration else None,
             calibration_count=self.calibration_count,
             drift_events=self.drift_events,
-            critical_events=self.critical_events
+            critical_events=self.critical_events,
+            success_rate=success_rate,
+            tvi=tvi
         )
     
     def get_current_drift(self) -> float:
@@ -624,7 +857,7 @@ class AutoCalibrationSystem:
         Get the current drift measurement.
         
         Returns:
-            Current drift value (0.0 to 1.0)
+            float: Current drift value (0.0 to 1.0)
         """
         if not self.drift_history:
             return 1.0  # Assume maximum drift if no history
@@ -650,7 +883,7 @@ class AutoCalibrationSystem:
         Useful for debugging or when immediate correction is needed.
         """
         logger.info("Forcing immediate calibration")
-        return self.run_calibration()
+        return self._perform_calibration()
     
     def set_drift_thresholds(self, threshold: float, critical_threshold: Optional[float] = None) -> None:
         """
@@ -693,8 +926,153 @@ class AutoCalibrationSystem:
             "calibration_interval": self.calibration_interval,
             "time_since_last_calibration": time.time() - self.last_calibration if self.last_calibration else None,
             "calibration_success_rate": (
-                sum(1 for e in self.correction_history if e.success) / len(self.correction_history)
-                if self.correction_history else 1.0
+                self.successful_calibrations / self.calibration_count
+                if self.calibration_count > 0 else 1.0
             ),
+            "tvi": self.hypercube.get_current_metrics().tvi if hasattr(self.hypercube, 'get_current_metrics') else 1.0,
+            "timestamp": time.time()
+        }
+    
+    def simulate_environmental_change(self, **kwargs) -> None:
+        """
+        Simulate environmental changes for testing calibration response.
+        
+        Args:
+            **kwargs: Environmental factors to change (temperature, vibration, etc.)
+            
+        Example:
+            >>> calibrator.simulate_environmental_change(temperature=35.0, vibration=0.7)
+        """
+        for key, value in kwargs.items():
+            if key in self.environment_factors:
+                self.environment_factors[key] = value
+                logger.info(f"Simulated environmental change: {key} = {value}")
+    
+    def reset_self_learning(self) -> None:
+        """
+        Reset the self-learning parameters to initial state.
+        
+        Useful when the system is moved to a new environment or after major updates.
+        """
+        self.performance_history = []
+        self.adaptive_interval_factor = 1.0
+        logger.info("Self-learning parameters reset")
+    
+    def get_self_learning_report(self) -> Dict[str, Any]:
+        """
+        Generate a report on the self-learning capabilities of the calibration system.
+        
+        Returns:
+            Dictionary with self-learning metrics and insights
+        """
+        if not self.performance_history:
+            return {
+                "status": "insufficient_data",
+                "message": "Not enough calibration history for self-learning analysis"
+            }
+        
+        # Calculate success rates by environmental conditions
+        temp_buckets = {}
+        vibration_buckets = {}
+        
+        for entry in self.performance_history:
+            # Temperature buckets (5-degree intervals)
+            temp_key = f"{int(entry['environment']['temperature'] / 5) * 5}-{int(entry['environment']['temperature'] / 5) * 5 + 5}"
+            if temp_key not in temp_buckets:
+                temp_buckets[temp_key] = {"successes": 0, "total": 0}
+            temp_buckets[temp_key]["total"] += 1
+            if entry["success"]:
+                temp_buckets[temp_key]["successes"] += 1
+            
+            # Vibration buckets (0.1 intervals)
+            vibration_key = f"{int(entry['environment']['vibration'] / 0.1) * 0.1:.1f}-{int(entry['environment']['vibration'] / 0.1) * 0.1 + 0.1:.1f}"
+            if vibration_key not in vibration_buckets:
+                vibration_buckets[vibration_key] = {"successes": 0, "total": 0}
+            vibration_buckets[vibration_key]["total"] += 1
+            if entry["success"]:
+                vibration_buckets[vibration_key]["successes"] += 1
+        
+        # Format buckets for report
+        temp_report = {
+            bucket: {
+                "success_rate": data["successes"] / data["total"],
+                "sample_size": data["total"]
+            } for bucket, data in temp_buckets.items()
+        }
+        
+        vibration_report = {
+            bucket: {
+                "success_rate": data["successes"] / data["total"],
+                "sample_size": data["total"]
+            } for bucket, data in vibration_buckets.items()
+        }
+        
+        return {
+            "adaptive_interval_factor": self.adaptive_interval_factor,
+            "environmental_impact": {
+                "temperature": temp_report,
+                "vibration": vibration_report,
+                "electromagnetic_noise": self.environment_factors.get("noise_sensitivity", 0.0)
+            },
+            "learning_window_size": len(self.performance_history),
+            "total_calibrations_analyzed": len(self.performance_history),
+            "timestamp": time.time()
+        }
+    
+    def optimize_for_environment(self) -> Dict[str, Any]:
+        """
+        Optimize calibration parameters for current environmental conditions.
+        
+        Returns:
+            Dictionary with optimization recommendations
+        """
+        report = self.get_self_learning_report()
+        if report["status"] == "insufficient_data":
+            return {
+                "status": "insufficient_data",
+                "message": "Not enough data to optimize for environment"
+            }
+        
+        # Find optimal calibration interval based on current conditions
+        current_temp = self.environment_factors["temperature"]
+        current_vibration = self.environment_factors["vibration"]
+        
+        # Find temperature bucket for current temperature
+        temp_key = f"{int(current_temp / 5) * 5}-{int(current_temp / 5) * 5 + 5}"
+        
+        # Find vibration bucket for current vibration
+        vibration_key = f"{int(current_vibration / 0.1) * 0.1:.1f}-{int(current_vibration / 0.1) * 0.1 + 0.1:.1f}"
+        
+        # Get success rates for current conditions
+        temp_success = report["environmental_impact"]["temperature"].get(temp_key, {}).get("success_rate", 0.8)
+        vibration_success = report["environmental_impact"]["vibration"].get(vibration_key, {}).get("success_rate", 0.8)
+        
+        # Calculate recommended interval
+        base_interval = self.calibration_interval
+        temp_factor = 1.0 if temp_success > 0.7 else 0.7
+        vibration_factor = 1.0 if vibration_success > 0.7 else 0.7
+        
+        recommended_interval = base_interval * temp_factor * vibration_factor
+        recommended_interval = max(MIN_CALIBRATION_INTERVAL, min(MAX_CALIBRATION_INTERVAL, recommended_interval))
+        
+        # Generate recommendations
+        recommendations = []
+        if temp_success < 0.7:
+            recommendations.append(
+                f"Consider environmental control: Temperature ({current_temp}°C) "
+                "is negatively impacting calibration success"
+            )
+        if vibration_success < 0.7:
+            recommendations.append(
+                f"Consider vibration isolation: Vibration level ({current_vibration:.2f}) "
+                "is negatively impacting calibration success"
+            )
+        
+        return {
+            "current_calibration_interval": self.calibration_interval,
+            "recommended_interval": recommended_interval,
+            "temperature_impact": temp_success,
+            "vibration_impact": vibration_success,
+            "recommendations": recommendations,
             "timestamp": time.time()
         }
