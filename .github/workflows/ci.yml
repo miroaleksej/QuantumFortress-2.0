@@ -1,0 +1,193 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install .[dev,docs]
+    
+    - name: Check code formatting with Black
+      run: |
+        black --check --diff src tests examples scripts
+    
+    - name: Check imports with isort
+      run: |
+        isort --check --diff src tests examples scripts
+    
+    - name: Type checking with mypy
+      run: |
+        mypy src
+    
+    - name: Run topological analysis tests
+      run: |
+        pytest tests/unit/topology/ tests/integration/topology/
+    
+    - name: Run quantum simulation tests
+      run: |
+        pytest tests/unit/quantum/ tests/integration/quantum/
+    
+    - name: Run TVI calculation tests
+      run: |
+        pytest tests/unit/crypto/test_tvi.py
+    
+    - name: Run adaptive hypercube tests
+      run: |
+        pytest tests/unit/core/test_adaptive_hypercube.py
+    
+    - name: Run hybrid crypto system tests
+      run: |
+        pytest tests/unit/core/test_hybrid_crypto.py
+    
+    - name: Run WDM parallelism tests
+      run: |
+        pytest tests/unit/consensus/test_wdm_parallelism.py
+    
+    - name: Run performance benchmarks
+      run: |
+        python tests/benchmarks/performance_comparison.py
+        python tests/benchmarks/migration_impact.py
+    
+    - name: Verify performance claims
+      run: |
+        # Verify signature verification speedup > 4.0x
+        SIGNATURE_SPEEDUP=$(python -c "import json; print(json.load(open('tests/benchmarks/results.json'))['signature_speedup'])")
+        if (( $(echo "$SIGNATURE_SPEEDUP < 4.0" | bc -l) )); then
+          echo "Error: Signature verification speedup is $SIGNATURE_SPEEDUP, expected > 4.0x"
+          exit 1
+        fi
+        
+        # Verify nonce search speedup > 4.0x
+        NONCE_SPEEDUP=$(python -c "import json; print(json.load(open('tests/benchmarks/results.json'))['nonce_speedup'])")
+        if (( $(echo "$NONCE_SPEEDUP < 4.0" | bc -l) )); then
+          echo "Error: Nonce search speedup is $NONCE_SPEEDUP, expected > 4.0x"
+          exit 1
+        fi
+        
+        # Verify TVI threshold for secure wallets
+        TVI_SECURE=$(python -c "import json; print(json.load(open('tests/benchmarks/results.json'))['tvi_secure'])")
+        if (( $(echo "$TVI_SECURE > 0.1" | bc -l) )); then
+          echo "Error: TVI for secure wallets is $TVI_SECURE, expected < 0.1"
+          exit 1
+        fi
+        
+        # Verify TVI threshold for vulnerable wallets
+        TVI_VULNERABLE=$(python -c "import json; print(json.load(open('tests/benchmarks/results.json'))['tvi_vulnerable'])")
+        if (( $(echo "$TVI_VULNERABLE < 0.8" | bc -l) )); then
+          echo "Error: TVI for vulnerable wallets is $TVI_VULNERABLE, expected > 0.8"
+          exit 1
+        fi
+    
+    - name: Security scan with bandit
+      run: |
+        bandit -r src -f json -o bandit-report.json
+        cat bandit-report.json
+    
+    - name: Build documentation
+      run: |
+        cd docs && make html
+
+  gpu-build:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:11.8.0-base-ubuntu22.04
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.9"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install .[gpu,dev]
+    
+    - name: Run GPU-accelerated topological analysis
+      run: |
+        pytest tests/unit/topology/gpu/
+    
+    - name: Run GPU-accelerated quantum simulation
+      run: |
+        pytest tests/unit/quantum/gpu/
+    
+    - name: Run WDM parallelism GPU benchmarks
+      run: |
+        python tests/benchmarks/gpu_wdm_benchmarks.py
+    
+    - name: Verify GPU performance claims
+      run: |
+        # Verify GPU-accelerated signature verification speedup > 6.0x
+        GPU_SIGNATURE_SPEEDUP=$(python -c "import json; print(json.load(open('tests/benchmarks/gpu_results.json'))['gpu_signature_speedup'])")
+        if (( $(echo "$GPU_SIGNATURE_SPEEDUP < 6.0" | bc -l) )); then
+          echo "Error: GPU signature verification speedup is $GPU_SIGNATURE_SPEEDUP, expected > 6.0x"
+          exit 1
+        fi
+        
+        # Verify WDM parallelism speedup > 8.0x
+        WDM_SPEEDUP=$(python -c "import json; print(json.load(open('tests/benchmarks/gpu_results.json'))['wdm_speedup'])")
+        if (( $(echo "$WDM_SPEEDUP < 8.0" | bc -l) )); then
+          echo "Error: WDM parallelism speedup is $WDM_SPEEDUP, expected > 8.0x"
+          exit 1
+        fi
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.9"
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety safety-db
+        npm install -g snyk
+    
+    - name: Run security scan with bandit
+      run: |
+        bandit -r src -f markdown -o security/bandit-report.md
+    
+    - name: Run dependency security scan
+      run: |
+        safety check --output=security/safety-report.txt
+    
+    - name: Run quantum vulnerability scan
+      run: |
+        python src/utils/quantum_vulnerability_scanner.py --output security/quantum-vuln-report.txt
+    
+    - name: Verify TVI security thresholds
+      run: |
+        # Verify that TVI correctly identifies vulnerabilities
+        VULN_DETECTION_RATE=$(python -c "import json; print(json.load(open('security/quantum-vuln-report.txt'))['detection_rate'])")
+        if (( $(echo "$VULN_DETECTION_RATE < 0.95" | bc -l) )); then
+          echo "Error: Vulnerability detection rate is $VULN_DETECTION_RATE, expected > 0.95"
+          exit 1
+        fi
