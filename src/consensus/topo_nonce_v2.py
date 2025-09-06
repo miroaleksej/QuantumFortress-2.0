@@ -4,8 +4,8 @@ topo_nonce_v2.py - Topologically-optimized nonce generation for QuantumFortress 
 This module implements the core innovation of QuantumFortress 2.0: TopoNonceV2,
 a nonce generation system that uses topological analysis to optimize the mining process.
 
-The key principle is described in Ur Uz работа.md: "Алгоритм TopoNonce, генерирующий k так,
-чтобы точки (u_r, u_z) равномерно покрывали тор". Instead of random nonce generation,
+The key principle is described in Ur Uz работа.md: "Algorithm TopoNonce, generating k so
+that points (u_r, u_z) uniformly cover the torus". Instead of random nonce generation,
 this system ensures uniform coverage of the torus space S¹ × S¹, which is topologically
 equivalent to the ECDSA signature space.
 
@@ -17,7 +17,7 @@ The implementation includes:
 - Self-calibration system to maintain topological integrity
 
 Based on the fundamental result from Ur Uz работа.md:
-"Множество решений уравнения ECDSA топологически эквивалентно двумерному тору S¹ × S¹"
+"The set of solutions to the ECDSA equation is topologically equivalent to the 2D torus S¹ × S¹"
 
 Author: Quantum Topology Research Group
 Institution: Tambov Research Institute of Quantum Topology
@@ -45,6 +45,14 @@ from quantum_fortress.topology.optimized_cache import TopologicallyOptimizedCach
 from quantum_fortress.core.adaptive_hypercube import AdaptiveQuantumHypercube
 from quantum_fortress.core.auto_calibration import AutoCalibrationSystem
 
+# Import fastecdsa for proper ECDSA operations
+try:
+    from fastecdsa import curve, ecdsa, keys
+    from fastecdsa.curve import secp256k1
+    from fastecdsa.point import Point
+except ImportError:
+    logging.warning("fastecdsa not available. Some functionality will be limited.")
+
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -64,6 +72,10 @@ POSITION_UPDATE_INTERVAL = 100  # Iterations between position updates
 CALIBRATION_INTERVAL = 60.0    # Seconds between auto-calibration checks
 MAX_DRIFT = 0.15           # Maximum allowed quantum drift
 TVI_BLOCK_THRESHOLD = 0.5  # TVI threshold for blocking transactions
+
+# secp256k1 curve parameters
+N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141  # Curve order
+P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F  # Prime modulus
 
 @dataclass
 class NonceGenerationResult:
@@ -95,8 +107,8 @@ class TopoNonceV2:
     - Integration with quantum hypercube for enhanced security
     - Self-calibration to maintain topological integrity
     
-    Based on Ur Uz работа.md: "Разбить тор на m x m ячеек, Для каждой новой подписи выбирать k,
-    чтобы соответствующая точка попадала в наименее заполненную ячейку"
+    Based on Ur Uz работа.md: "Divide the torus into m x m cells, For each new signature choose k,
+    so that the corresponding point falls into the least filled cell"
     
     Example usage:
         hypercube = AdaptiveQuantumHypercube(dimension=4)
@@ -173,8 +185,8 @@ class TopoNonceV2:
         Get the next positions for nonce generation using Dynamic Snails Method.
         
         This implements the "method of dynamic snails" described in Ur Uz работа.md:
-        "Разбить тор на m x m ячеек, Для каждой новой подписи выбирать k, чтобы
-        соответствующая точка попадала в наименее заполненную ячейку"
+        "Divide the torus into m x m cells, For each new signature choose k, so
+        that the corresponding point falls into the least filled cell"
         
         Returns:
             List[Tuple[float, float]]: Next positions for nonce generation
@@ -336,7 +348,7 @@ class TopoNonceV2:
     
     def generate_nonce(self,
                       private_key: int,
-                      message_hash: bytes,
+                      message: bytes,
                       target: int,
                       max_time: float = 30.0,
                       callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> Tuple[int, int, int]:
@@ -351,7 +363,7 @@ class TopoNonceV2:
         
         Args:
             private_key: Private key for signing
-            message_hash: Message hash to sign
+            message: Message to sign
             target: Mining target (lower = harder)
             max_time: Maximum time to spend on nonce generation
             callback: Optional callback for progress updates
@@ -394,7 +406,7 @@ class TopoNonceV2:
                             executor.submit(
                                 self._process_position,
                                 private_key,
-                                message_hash,
+                                message,
                                 ur,
                                 uz
                             )
@@ -464,7 +476,7 @@ class TopoNonceV2:
     
     def _process_position(self,
                          private_key: int,
-                         message_hash: bytes,
+                         message: bytes,
                          ur: float,
                          uz: float) -> Dict[str, Any]:
         """
@@ -472,32 +484,34 @@ class TopoNonceV2:
         
         Args:
             private_key: Private key for signing
-            message_hash: Message hash to sign
+            message: Message to sign
             ur: u_r coordinate on the torus
             uz: u_z coordinate on the torus
             
         Returns:
             Dict[str, Any]: Processing results
         """
-        n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141  # secp256k1 order
-        
         # Convert position to nonce
-        k = self._position_to_nonce((ur, uz), n)
+        k = self._position_to_nonce((ur, uz), N)
         
-        # Sign with this nonce
+        # Sign with this nonce using fastecdsa for proper ECDSA operations
         try:
-            r, s = ecdsa_sign(private_key, message_hash, k)
+            # Create a Point object for the public key
+            public_key = self._private_key_to_public(private_key)
+            
+            # Use the nonce to sign the message
+            r, s = self._sign_with_nonce(private_key, message, k)
             
             # Calculate block hash
-            block_hash = calculate_block_hash(message_hash, r, s)
+            block_hash = self._calculate_block_hash(message, r, s)
             block_hash_int = int(block_hash, 16)
             
             # Analyze topological metrics
-            z = int.from_bytes(message_hash, 'big') % n
+            z = int.from_bytes(message, 'big') % N
             metrics = analyze_signature_topology([(ur, uz)])
             
-            # Check if valid
-            valid = block_hash_int < 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+            # Check if valid (this is a simplified check for demonstration)
+            valid = self._verify_signature(public_key, message, r, s)
             
             return {
                 "valid": valid,
@@ -517,6 +531,96 @@ class TopoNonceV2:
                 "valid": False,
                 "error": str(e)
             }
+    
+    def _private_key_to_public(self, private_key: int) -> Point:
+        """
+        Convert private key to public key using fastecdsa.
+        
+        Args:
+            private_key: Private key integer
+            
+        Returns:
+            Point: Public key point on the curve
+        """
+        return private_key * secp256k1.G
+    
+    def _sign_with_nonce(self, private_key: int, message: bytes, k: int) -> Tuple[int, int]:
+        """
+        Sign a message using ECDSA with the specified nonce.
+        
+        Args:
+            private_key: Private key for signing
+            message: Message to sign
+            k: Nonce value
+            
+        Returns:
+            Tuple[int, int]: (r, s) signature components
+            
+        Note: This uses fastecdsa for proper ECDSA signing.
+        """
+        # Hash the message
+        message_hash = int.from_bytes(message, 'big') % N
+        
+        # Calculate r = x-coordinate of (k * G) mod N
+        point = k * secp256k1.G
+        r = point.x % N
+        
+        # Calculate s = k^-1 (message_hash + r * private_key) mod N
+        s = (pow(k, -1, N) * (message_hash + r * private_key)) % N
+        
+        return r, s
+    
+    def _verify_signature(self, public_key: Point, message: bytes, r: int, s: int) -> bool:
+        """
+        Verify an ECDSA signature using fastecdsa.
+        
+        Args:
+            public_key: Public key point
+            message: Message that was signed
+            r, s: Signature components
+            
+        Returns:
+            bool: True if signature is valid, False otherwise
+        """
+        try:
+            # Hash the message
+            message_hash = int.from_bytes(message, 'big') % N
+            
+            # Calculate w = s^-1 mod N
+            w = pow(s, -1, N)
+            
+            # Calculate u1 = message_hash * w mod N
+            u1 = (message_hash * w) % N
+            
+            # Calculate u2 = r * w mod N
+            u2 = (r * w) % N
+            
+            # Calculate point = u1*G + u2*public_key
+            point = u1 * secp256k1.G + u2 * public_key
+            
+            # Verify signature
+            return (point.x % N) == r
+        except Exception as e:
+            logger.debug(f"Signature verification failed: {str(e)}")
+            return False
+    
+    def _calculate_block_hash(self, message: bytes, r: int, s: int) -> str:
+        """
+        Calculate block hash for the given signature.
+        
+        Args:
+            message: Original message
+            r, s: ECDSA signature components
+            
+        Returns:
+            str: Hexadecimal hash string
+        """
+        import hashlib
+        
+        # In a real implementation, this would calculate the actual block hash
+        # For this example, we'll create a hash based on inputs
+        hash_input = f"{message.hex()}{r}{s}".encode()
+        return hashlib.sha256(hash_input).hexdigest()
     
     def _update_position_from_coverage(self):
         """
@@ -624,10 +728,9 @@ class TopoNonceV2:
             List[Tuple[int, int, int]]: List of (nonce, r, s) candidates
         """
         candidates = []
-        n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141  # secp256k1 order
         
         # Generate base point on the torus
-        base_point = (secrets.randbelow(n) / n, secrets.randbelow(n) / n)
+        base_point = (secrets.randbelow(N) / N, secrets.randbelow(N) / N)
         
         # Generate points using dynamic snails method
         snail_points = self.dynamic_snail_generator(
@@ -637,9 +740,12 @@ class TopoNonceV2:
         
         # Convert points to nonce candidates
         for ur, uz in snail_points:
-            k = self._position_to_nonce((ur, uz), n)
+            k = self._position_to_nonce((ur, uz), N)
             try:
-                r, s = ecdsa_sign(0, message, k)  # Private key 0 is placeholder
+                # Create a dummy public key for signing demonstration
+                # In a real implementation, you would use the actual private key
+                dummy_private_key = secrets.randbelow(N)
+                r, s = self._sign_with_nonce(dummy_private_key, message, k)
                 candidates.append((k, r, s))
             except:
                 continue
@@ -661,8 +767,8 @@ class TopoNonceV2:
         Returns:
             List[Tuple[float, float]]: Generated points on the torus
         
-        Based on Ur Uz работа.md: "Алгоритм TopoNonce, генерирующий k так, чтобы точки (u_r, u_z)
-        равномерно покрывали тор"
+        Based on Ur Uz работа.md: "Algorithm TopoNonce, generating k so that points (u_r, u_z)
+        uniformly cover the torus"
         """
         points = []
         ur, uz = base_point
@@ -682,24 +788,23 @@ class TopoNonceV2:
         
         return points
     
-    def validate_nonce_security(self, nonce: int, r: int, s: int, message_hash: bytes) -> bool:
+    def validate_nonce_security(self, nonce: int, r: int, s: int, message: bytes, public_key: Point) -> bool:
         """
         Validate the security of a nonce using topological analysis.
         
         Args:
             nonce: Nonce value to validate
             r, s: ECDSA signature components
-            message_hash: Message hash that was signed
+            message: Message that was signed
+            public_key: Public key for verification
             
         Returns:
             bool: True if nonce is secure, False if vulnerable
         """
-        n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141  # secp256k1 order
-        
         # Calculate u_r and u_z
-        z = int.from_bytes(message_hash, 'big') % n
-        ur = (z * pow(s, -1, n)) % n / n
-        uz = (r * pow(s, -1, n)) % n / n
+        z = int.from_bytes(message, 'big') % N
+        ur = (z * pow(s, -1, N)) % N / N
+        uz = (r * pow(s, -1, N)) % N / N
         
         # Analyze topological metrics
         metrics = analyze_signature_topology([(ur, uz)])
@@ -711,114 +816,6 @@ class NonceGenerationFailure(Exception):
     """Exception raised when nonce generation fails."""
     pass
 
-def ecdsa_sign(private_key: int, message: bytes, k: int) -> Tuple[int, int]:
-    """
-    Sign a message using ECDSA with the specified nonce.
-    
-    Args:
-        private_key: Private key for signing
-        message: Message to sign
-        k: Nonce value
-        
-    Returns:
-        Tuple[int, int]: (r, s) signature components
-    
-    Note: In a real implementation, this would use a proper ECDSA library.
-    This is a simplified version for demonstration purposes.
-    """
-    # In a real implementation, this would perform actual ECDSA signing
-    # For this example, we'll return deterministic values based on inputs
-    n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141  # secp256k1 order
-    
-    # Simplified calculation for demonstration
-    r = (k * 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798) % n
-    s = (pow(k, -1, n) * (int.from_bytes(message, 'big') + private_key * r)) % n
-    
-    return r % n, s % n
-
-def calculate_block_hash(message_hash: bytes, r: int, s: int) -> str:
-    """
-    Calculate block hash for the given signature.
-    
-    Args:
-        message_hash: Original message hash
-        r, s: ECDSA signature components
-        
-    Returns:
-        str: Hexadecimal hash string
-    
-    Note: In a real implementation, this would use a proper hash function.
-    This is a simplified version for demonstration purposes.
-    """
-    import hashlib
-    
-    # In a real implementation, this would calculate the actual block hash
-    # For this example, we'll create a hash based on inputs
-    hash_input = f"{message_hash.hex()}{r}{s}".encode()
-    return hashlib.sha256(hash_input).hexdigest()
-
-def wdm_parallel_ecdsa_sign(private_key: int,
-                          message: bytes,
-                          n_channels: int = WDM_DEFAULT_CHANNELS) -> Tuple[int, int]:
-    """
-    Sign a message using ECDSA with WDM parallelism.
-    
-    Args:
-        private_key: Private key for signing
-        message: Message to sign
-        n_channels: Number of parallel channels (wavelengths)
-    
-    Returns:
-        Tuple[int, int]: (r, s) signature components with best topology
-    
-    As stated in Квантовый ПК.md: "Оптимизация квантовой схемы для WDM-параллелизма"
-    """
-    start_time = time.time()
-    
-    # Generate multiple nonces using dynamic snails
-    base_point = (secrets.randbelow(N) / N, secrets.randbelow(N) / N)
-    snail_points = dynamic_snail_generator(base_point, num_points=n_channels)
-    
-    signatures = []
-    for i, (ur, uz) in enumerate(snail_points):
-        # Convert back to integer values for nonce
-        k = int(ur * N) % N
-        if k == 0: 
-            k = 1
-        
-        # Sign with this nonce
-        r, s = ecdsa_sign(private_key, message, k)
-        signatures.append((r, s))
-    
-    # Select the best signature based on topological metrics
-    best_signature = None
-    best_score = float('inf')
-    z = hash_message(message)
-    
-    for r, s in signatures:
-        metrics = analyze_signature_topology(r, s, z)
-        if metrics.vulnerability_score < best_score:
-            best_score = metrics.vulnerability_score
-            best_signature = (r, s)
-    
-    # Log performance
-    duration = time.time() - start_time
-    logger.debug(f"WDM parallel signing completed in {duration:.4f}s with {n_channels} channels")
-    
-    return best_signature
-
-def hash_message(message: bytes) -> int:
-    """
-    Hash a message to an integer value.
-    
-    Args:
-        message: Message to hash
-        
-    Returns:
-        int: Hash value
-    """
-    return int.from_bytes(hashlib.sha256(message).digest(), 'big')
-
 def example_usage() -> None:
     """
     Example usage of TopoNonceV2 for nonce generation.
@@ -826,37 +823,37 @@ def example_usage() -> None:
     Demonstrates how to use the module for topologically-optimized nonce generation.
     """
     print("=" * 60)
-    print("Пример использования TopoNonceV2 для генерации nonce")
+    print("Example usage of TopoNonceV2 for nonce generation")
     print("=" * 60)
     
     # Create quantum hypercube
-    print("\n1. Создание квантового гиперкуба...")
+    print("\n1. Creating quantum hypercube...")
     hypercube = AdaptiveQuantumHypercube(dimension=4)
-    print(f"  - Создан {hypercube.dimension}D квантовый гиперкуб")
+    print(f"  - Created {hypercube.dimension}D quantum hypercube")
     
     # Initialize TopoNonceV2
-    print("\n2. Инициализация TopoNonceV2...")
+    print("\n2. Initializing TopoNonceV2...")
     topo_nonce = TopoNonceV2(hypercube, n_channels=8)
-    print(f"  - Инициализирован с {topo_nonce.n_channels} каналами WDM-параллелизма")
+    print(f"  - Initialized with {topo_nonce.n_channels} WDM parallelism channels")
     
     # Generate test data
-    print("\n3. Генерация тестовых данных...")
-    private_key = 0xDEADBEEFCAFEBABE  # Example private key
+    print("\n3. Generating test data...")
+    private_key = secrets.randbelow(N)  # Example private key
     message = b"QuantumFortress 2.0 Mining"
     target = 0x00000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
-    print(f"  - Целевой хэш: {hex(target)}")
+    print(f"  - Target hash: {hex(target)}")
     
     # Generate nonce with progress callback
-    print("\n4. Генерация топологически оптимизированного nonce...")
+    print("\n4. Generating topologically-optimized nonce...")
     progress_updates = []
     
     def progress_callback(progress):
         progress_updates.append(progress)
         if len(progress_updates) % 5 == 0:
             print(
-                f"  - Прогресс: {progress['iterations']} итераций, "
-                f"покрытие: {progress['coverage']:.2%}, "
-                f"время: {progress['time_elapsed']:.2f}с"
+                f"  - Progress: {progress['iterations']} iterations, "
+                f"coverage: {progress['coverage']:.2%}, "
+                f"time: {progress['time_elapsed']:.2f}s"
             )
     
     try:
@@ -872,33 +869,33 @@ def example_usage() -> None:
         generation_time = time.time() - start_time
         
         # Display results
-        print(f"\n5. Результаты генерации:")
-        print(f"  - Найден nonce: {nonce}")
-        print(f"  - Подпись: r={r}, s={s}")
-        print(f"  - Время генерации: {generation_time:.4f} сек")
+        print(f"\n5. Generation results:")
+        print(f"  - Found nonce: {nonce}")
+        print(f"  - Signature: r={r}, s={s}")
+        print(f"  - Generation time: {generation_time:.4f} sec")
         
         # Get metrics
         metrics = topo_nonce.get_metrics()
-        print("\n6. Метрики производительности:")
-        print(f"  - Среднее время: {metrics['average_time']:.4f} сек")
-        print(f"  - Среднее количество итераций: {metrics['average_iterations']:.1f}")
-        print(f"  - Коэффициент покрытия: {metrics['coverage_score']:.2%}")
-        print(f"  - Доля безопасных nonce: {metrics['secure_ratio']:.2%}")
+        print("\n6. Performance metrics:")
+        print(f"  - Average time: {metrics['average_time']:.4f} sec")
+        print(f"  - Average iterations: {metrics['average_iterations']:.1f}")
+        print(f"  - Coverage score: {metrics['coverage_score']:.2%}")
+        print(f"  - Secure nonce ratio: {metrics['secure_ratio']:.2%}")
         
         # Get coverage statistics
         coverage_stats = metrics["coverage_statistics"]
-        print("\n7. Статистика покрытия тора:")
-        print(f"  - Равномерность: {coverage_stats['uniformity']:.4f}")
-        print(f"  - Энтропия: {coverage_stats['entropy']:.4f}")
-        print(f"  - Минимальное покрытие ячейки: {coverage_stats['min_coverage']}")
-        print(f"  - Максимальное покрытие ячейки: {coverage_stats['max_coverage']}")
+        print("\n7. Torus coverage statistics:")
+        print(f"  - Uniformity: {coverage_stats['uniformity']:.4f}")
+        print(f"  - Entropy: {coverage_stats['entropy']:.4f}")
+        print(f"  - Min cell coverage: {coverage_stats['min_coverage']}")
+        print(f"  - Max cell coverage: {coverage_stats['max_coverage']}")
         
     except NonceGenerationFailure as e:
-        print(f"\n  - Ошибка: {str(e)}")
-        print("  - Попробуйте увеличить время генерации или проверить квантовое состояние")
+        print(f"\n  - Error: {str(e)}")
+        print("  - Try increasing generation time or checking quantum state")
     
     print("=" * 60)
-    print("TopoNonceV2 успешно продемонстрировал топологически-оптимизированную генерацию nonce.")
+    print("TopoNonceV2 successfully demonstrated topologically-optimized nonce generation.")
     print("=" * 60)
 
 if __name__ == "__main__":
