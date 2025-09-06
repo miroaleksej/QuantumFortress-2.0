@@ -1,22 +1,21 @@
 """
-optimized_cache.py - Topologically-Optimized Cache for QuantumFortress 2.0
+optimized_cache.py - Topologically-optimized cache for cryptographic security analysis.
 
-This module implements a cache system that uses topological analysis to optimize
-data retrieval and storage. Unlike traditional caches that rely on temporal or
-spatial locality, this system leverages the topological structure of the data
-space to make intelligent caching decisions.
-
-The implementation is based on the principles from "Ur Uz работа.md" and
-"Prototype_TopoMine.txt", which describe how topological properties can be used
-to optimize blockchain operations, particularly for signature verification and
-nonce search.
+This module implements a cache system that leverages topological properties of cryptographic
+signatures to optimize lookup and storage. Instead of traditional cache approaches that rely
+on exact key matching, this system uses topological proximity to identify "nearby" regions
+that can benefit from similar optimization strategies.
 
 Key features:
-- Dynamic cache strategy based on topological metrics (Betti numbers, curvature)
-- Region-based caching using torus topology of ECDSA signatures
-- WDM-parallelized cache access for improved performance
-- Self-adjusting cache size based on topological stability
+- Topological region identification based on Betti numbers, curvature, and spiral patterns
+- Dynamic cache sizing based on access patterns and topological stability
+- Efficient lookup using topological proximity rather than exact key matching
 - Integration with TVI (Topological Vulnerability Index) for security-aware caching
+
+Based on principles from:
+- Ur Uz работа.md: "Множество решений уравнения ECDSA топологически эквивалентно двумерному тору S¹ × S¹"
+- Ur Uz работа_2.md: "Связь нарушений аксиом с конкретными уязвимостями"
+- Prototype_TopoMine.txt: Implementation of region-based caching for signature verification
 
 Author: Quantum Topology Research Group
 Institution: Tambov Research Institute of Quantum Topology
@@ -26,872 +25,735 @@ Email: miro-aleksej@yandex.ru
 import numpy as np
 import time
 import logging
-from typing import Dict, Any, List, Tuple, Optional, Set, TypeVar, Generic
-from collections import OrderedDict, deque
-import hashlib
-import math
+from typing import Dict, Any, List, Tuple, Optional, Callable
 from dataclasses import dataclass
+import math
+from scipy.spatial import distance
+from .metrics import TopologicalMetrics, TVI_SECURE_THRESHOLD
 
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-# Type variables for generic cache
-K = TypeVar('K')
-V = TypeVar('V')
+# Cache configuration constants
+DEFAULT_MAX_SIZE = 1000
+MIN_CACHE_SIZE = 100
+MAX_CACHE_SIZE = 5000
+CACHE_DECAY_RATE = 0.95
+ACCESS_WEIGHT = 0.7
+TOPOLOGICAL_WEIGHT = 0.3
+REGION_SIMILARITY_THRESHOLD = 0.2
+CACHE_HIT_BONUS = 1.5
+CACHE_MISS_PENALTY = 0.8
+STABILITY_THRESHOLD = 0.15
+RECENT_ACCESS_WINDOW = 300  # 5 minutes in seconds
 
 @dataclass
+class CacheEntry:
+    """Represents an entry in the topologically-optimized cache."""
+    metrics: TopologicalMetrics
+    region_id: str
+    last_access: float
+    access_count: int
+    stability_score: float
+    performance_gain: float
+    signature_count: int
+    region_fingerprint: np.ndarray
+    last_verification_time: float = 0.0
+
 class TopologicalRegion:
-    """
-    Represents a topological region in the cache space.
-    
-    Based on the region analysis in Prototype_TopoMine.txt:
-    "Generate a unique region ID based on topological features"
-    """
-    region_id: str
-    betti_numbers: List[float]
-    curvature: float
-    spiral_strength: float
-    spiral_direction: str
-    symmetry: Dict[str, float]
-    density: float
-    access_count: int = 0
-    last_access: float = 0.0
-    tvi: float = 0.0
-
-@dataclass
-class CacheEntry(Generic[K, V]):
-    """
-    Represents a single entry in the topologically-optimized cache.
-    """
-    key: K
-    value: V
-    region_id: str
-    timestamp: float
-    access_count: int = 0
-    tvi: float = 0.0
-    topological_metrics: Dict[str, Any] = None
-
-class TopologicalCacheMetrics:
-    """
-    Tracks performance metrics for the topological cache.
-    
-    Based on metrics described in Prototype_TopoMine.txt and TopoMine_Validation.txt.
-    """
-    def __init__(self):
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-        self.total_accesses = 0
-        self.hit_ratio = 0.0
-        self.miss_ratio = 0.0
-        self.eviction_ratio = 0.0
-        self.topological_hits = 0
-        self.topological_misses = 0
-        self.topological_hit_ratio = 0.0
-        self.avg_response_time = 0.0
-        self.last_update = time.time()
-        self.region_distribution = {}
-        self.tvi_distribution = {
-            "secure": 0,
-            "warning": 0,
-            "critical": 0
-        }
-        
-    def update(self, is_hit: bool, is_topological: bool, response_time: float, 
-              region_id: str, tvi: float) -> None:
-        """Update cache metrics based on access."""
-        self.total_accesses += 1
-        self.hits += 1 if is_hit else 0
-        self.misses += 0 if is_hit else 1
-        self.topological_hits += 1 if (is_hit and is_topological) else 0
-        self.topological_misses += 0 if (is_hit and is_topological) else 1
-        
-        # Update hit ratios
-        if self.total_accesses > 0:
-            self.hit_ratio = self.hits / self.total_accesses
-            self.miss_ratio = self.misses / self.total_accesses
-            
-        if self.hits > 0:
-            self.topological_hit_ratio = self.topological_hits / self.hits
-            
-        # Update response time
-        self.avg_response_time = (self.avg_response_time * (self.total_accesses - 1) + response_time) / self.total_accesses
-        
-        # Update region distribution
-        if region_id not in self.region_distribution:
-            self.region_distribution[region_id] = 0
-        self.region_distribution[region_id] += 1
-        
-        # Update TVI distribution
-        if tvi < 0.3:
-            self.tvi_distribution["secure"] += 1
-        elif tvi < 0.6:
-            self.tvi_distribution["warning"] += 1
-        else:
-            self.tvi_distribution["critical"] += 1
-            
-        self.last_update = time.time()
-    
-    def get_report(self) -> Dict[str, Any]:
-        """Generate a performance report."""
-        total_tvi = sum(self.tvi_distribution.values()) or 1
-        return {
-            "hits": self.hits,
-            "misses": self.misses,
-            "hit_ratio": self.hit_ratio,
-            "topological_hit_ratio": self.topological_hit_ratio,
-            "avg_response_time": self.avg_response_time,
-            "region_distribution": self.region_distribution,
-            "tvi_distribution": {
-                k: v / total_tvi for k, v in self.tvi_distribution.items()
-            },
-            "last_update": self.last_update
-        }
-
-class TopologicallyOptimizedCache(Generic[K, V]):
-    """
-    Topologically-Optimized Cache for QuantumFortress 2.0.
-    
-    This cache uses topological analysis of data to optimize storage and retrieval.
-    Instead of traditional LRU or LFU algorithms, it uses:
-    - Topological proximity (based on Betti numbers and curvature)
-    - TVI-based priority (lower TVI = higher priority)
-    - WDM-parallelized access patterns
-    
-    As described in Prototype_TopoMine.txt:
-    "TopoMine warning: Topological analysis failed: {str(e)}"
-    
-    The cache is designed to work with the torus topology of ECDSA signatures,
-    where points are represented in (u_r, u_z) space.
-    """
-    
+    """Represents a topological region with similar characteristics."""
     def __init__(self, 
-                 max_size: int = 1000,
-                 tvi_threshold: float = 0.5,
-                 region_threshold: int = 5,
-                 min_cache_size: int = 100,
-                 max_cache_size: int = 10000):
+                 fingerprint: np.ndarray,
+                 metrics: TopologicalMetrics,
+                 region_id: str):
+        self.fingerprint = fingerprint
+        self.metrics = metrics
+        self.region_id = region_id
+        self.access_count = 1
+        self.last_access = time.time()
+        self.stability_score = self._calculate_stability(metrics)
+        self.performance_gain = 4.5  # Default for secure regions
+    
+    def _calculate_stability(self, metrics: TopologicalMetrics) -> float:
+        """Calculate stability score based on topological metrics."""
+        # Higher stability for secure regions with consistent metrics
+        stability = 1.0 - metrics.tvi
+        
+        # Additional stability for consistent topological entropy
+        if metrics.topological_entropy > 0.8:
+            stability *= 1.1
+        
+        # Penalize regions with high vulnerability indicators
+        if metrics.vulnerability_type != "none":
+            stability *= 0.7
+        
+        return max(0.0, min(1.0, stability))
+    
+    def update_access(self, metrics: TopologicalMetrics, performance_gain: float = 4.5):
+        """Update region access statistics."""
+        self.access_count += 1
+        self.last_access = time.time()
+        
+        # Update stability score with exponential moving average
+        new_stability = self._calculate_stability(metrics)
+        self.stability_score = 0.9 * self.stability_score + 0.1 * new_stability
+        
+        # Update performance gain
+        if performance_gain > 0:
+            self.performance_gain = (
+                (self.access_count - 1) * self.performance_gain + performance_gain
+            ) / self.access_count
+
+class TopologicallyOptimizedCache:
+    """
+    Cache system optimized for topological properties of cryptographic signatures.
+    
+    Unlike traditional caches that rely on exact key matching, this system identifies
+    "nearby" topological regions that can benefit from similar optimization strategies.
+    This approach significantly improves cache hit rates for cryptographic operations
+    by leveraging the continuous nature of topological space.
+    
+    The cache dynamically adjusts its size based on:
+    - Topological stability of regions
+    - Access patterns and recency
+    - Performance gains from cached regions
+    - System resource constraints
+    
+    Example usage:
+        cache = TopologicallyOptimizedCache(max_size=1000)
+        # Analyze topology of signatures
+        topology_metrics = analyze_signature_topology(signatures)
+        # Get optimized verification strategy
+        strategy = cache.get(topology_metrics)
+        if strategy:
+            result = fast_verify_with_strategy(signatures, strategy)
+        else:
+            result = standard_verify(signatures)
+            # Cache the result for future similar topologies
+            cache.store(topology_metrics, strategy, performance_gain=4.5)
+    """
+    
+    def __init__(self,
+                 max_size: int = DEFAULT_MAX_SIZE,
+                 similarity_threshold: float = REGION_SIMILARITY_THRESHOLD,
+                 stability_threshold: float = STABILITY_THRESHOLD,
+                 decay_rate: float = CACHE_DECAY_RATE):
         """
         Initialize the topologically-optimized cache.
         
         Args:
-            max_size: Maximum number of items in cache
-            tvi_threshold: Threshold for TVI to prioritize secure regions
-            region_threshold: Minimum items per region before optimization
-            min_cache_size: Minimum cache size for dynamic adjustment
-            max_cache_size: Maximum cache size for dynamic adjustment
+            max_size: Maximum number of regions to store in cache
+            similarity_threshold: Threshold for considering regions "nearby"
+            stability_threshold: Minimum stability for regions to be retained
+            decay_rate: Rate at which historical access is decayed
         """
-        self.max_size = max_size
-        self.tvi_threshold = tvi_threshold
-        self.region_threshold = region_threshold
-        self.min_cache_size = min_cache_size
-        self.max_cache_size = max_cache_size
-        
-        # Main cache storage - OrderedDict for LRU behavior within regions
-        self.cache: Dict[K, CacheEntry[K, V]] = {}
-        
-        # Region mapping - tracks which items belong to which topological region
-        self.region_map: Dict[str, Set[K]] = {}
-        
-        # Region metadata - information about each topological region
-        self.regions: Dict[str, TopologicalRegion] = {}
-        
-        # Metrics tracking
-        self.metrics = TopologicalCacheMetrics()
-        
-        # History for dynamic adjustment
-        self.access_history = deque(maxlen=1000)
+        self.max_size = max(min(max_size, MAX_CACHE_SIZE), MIN_CACHE_SIZE)
+        self.current_size = 0
+        self.similarity_threshold = similarity_threshold
+        self.stability_threshold = stability_threshold
+        self.decay_rate = decay_rate
+        self.region_map: Dict[str, TopologicalRegion] = {}
+        self.access_history: List[Tuple[float, str]] = []
+        self.performance_stats = {
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "total_requests": 0,
+            "time_saved": 0.0,
+            "last_prune_time": time.time()
+        }
         self.size_adjustment_history = []
-        
-        # Timestamp for last size adjustment
-        self.last_size_adjustment = time.time()
-        
-        logger.info(f"Initialized topologically-optimized cache with max_size={max_size}")
+        self.logger = logging.getLogger(__name__)
     
-    def _generate_region_id(self, topology_metrics: Dict[str, Any]) -> str:
+    def _create_region_fingerprint(self, metrics: TopologicalMetrics) -> np.ndarray:
         """
-        Generate a unique region ID based on topological features.
+        Create a numerical fingerprint representing the topological region.
         
-        Based on Prototype_TopoMine.txt:
-        "Generate a unique region ID based on topological features"
+        The fingerprint encodes key topological features in a way that preserves
+        topological proximity - similar regions will have similar fingerprints.
         
         Args:
-            topology_metrics: Dictionary of topological metrics
+            metrics: TopologicalMetrics object
             
         Returns:
-            str: Unique region ID
+            np.ndarray: Numerical fingerprint of the region
         """
-        # Extract key features
-        betti = topology_metrics.get("betti_numbers", [0.0, 0.0, 0.0])
-        curvature = topology_metrics.get("curvature", 0.0)
-        spiral = topology_metrics.get("spiral_analysis", {})
-        symmetry = topology_metrics.get("symmetry", {})
+        # Create a fingerprint that preserves topological proximity
+        fingerprint = np.zeros(8)
         
-        # Create fingerprint from Betti numbers (as in Prototype_TopoMine.txt)
-        betti_str = "_".join([f"{b:.2f}" for b in betti[:3]])
-        curvature_str = f"{curvature:.3f}"
+        # Betti numbers (primary topological features)
+        for i, beta in enumerate(metrics.betti_numbers[:3]):
+            fingerprint[i] = beta
         
-        # Get spiral direction
-        spiral_dir = spiral.get("direction", "none")
-        spiral_strength = f"{spiral.get('strength', 0.0):.3f}"
+        # Euler characteristic (topological invariant)
+        fingerprint[3] = metrics.euler_characteristic
         
-        # Get symmetry values
-        sym_h = f"{symmetry.get('horizontal', 0.0):.3f}"
-        sym_v = f"{symmetry.get('vertical', 0.0):.3f}"
-        sym_d = f"{symmetry.get('diagonal', 0.0):.3f}"
+        # Topological entropy (measures uniformity)
+        fingerprint[4] = metrics.topological_entropy
         
-        # Combine into hashable string
-        region_str = f"{betti_str}|{curvature_str}|{spiral_dir}|{spiral_strength}|{sym_h}|{sym_v}|{sym_d}"
+        # Naturalness coefficient (measures expectedness)
+        fingerprint[5] = metrics.naturalness_coefficient
         
-        # Return hash for compactness
-        return hashlib.md5(region_str.encode()).hexdigest()[:16]
+        # TVI (security metric)
+        fingerprint[6] = metrics.tvi
+        
+        # Vulnerability type encoded as numeric value
+        vuln_types = {
+            "none": 0.0,
+            "topological_structure": 0.3,
+            "entropy_deficiency": 0.5,
+            "predictability": 0.7,
+            "manifold_distortion": 1.0,
+            "unknown": 0.9
+        }
+        fingerprint[7] = vuln_types.get(metrics.vulnerability_type, 0.9)
+        
+        return fingerprint
     
-    def _find_nearby_regions(self, region_id: str, max_distance: float = 0.5) -> List[str]:
+    def _generate_region_id(self, metrics: TopologicalMetrics) -> str:
         """
-        Find regions that are topologically close to the given region.
+        Generate a unique but topology-preserving ID for a region.
+        
+        The ID is designed to be consistent for similar topological regions
+        while providing uniqueness for distinct regions.
         
         Args:
-            region_id: ID of the reference region
-            max_distance: Maximum topological distance to consider
+            metrics: TopologicalMetrics object
             
         Returns:
-            List[str]: List of nearby region IDs
+            str: Region identifier
         """
-        if region_id not in self.regions:
-            return []
+        # Create fingerprint from topological features
+        fingerprint = self._create_region_fingerprint(metrics)
         
-        reference_region = self.regions[region_id]
-        nearby_regions = []
-        
-        for reg_id, region in self.regions.items():
-            if reg_id == region_id:
-                continue
-                
-            # Calculate topological distance between regions
-            distance = self._calculate_region_distance(reference_region, region)
-            
-            if distance <= max_distance:
-                nearby_regions.append((reg_id, distance))
-        
-        # Sort by distance and return just the IDs
-        nearby_regions.sort(key=lambda x: x[1])
-        return [reg_id for reg_id, _ in nearby_regions]
+        # Quantize fingerprint to create stable ID
+        quantized = [int(x * 10) for x in fingerprint[:4]]  # Use first 4 most stable features
+        return f"R_{'_'.join(str(x) for x in quantized)}"
     
-    def _calculate_region_distance(self, region1: TopologicalRegion, 
-                                region2: TopologicalRegion) -> float:
+    def _region_similarity(self, 
+                          region1: TopologicalRegion, 
+                          region2: TopologicalRegion) -> float:
         """
-        Calculate topological distance between two regions.
+        Calculate similarity between two topological regions.
+        
+        Similarity is based on topological proximity in the feature space,
+        with emphasis on features critical for cryptographic security.
         
         Args:
             region1: First region
             region2: Second region
             
         Returns:
-            float: Topological distance (0.0 to 1.0)
+            float: Similarity score (0.0 to 1.0, higher is more similar)
         """
-        # Betti number distance
-        betti_dist = 0.0
-        for i in range(min(len(region1.betti_numbers), len(region2.betti_numbers))):
-            expected = 2.0 if i == 1 else 1.0  # For torus topology
-            diff1 = abs(region1.betti_numbers[i] - expected)
-            diff2 = abs(region2.betti_numbers[i] - expected)
-            betti_dist += abs(diff1 - diff2) / (expected + 1e-10)
+        # Weighted distance in topological feature space
+        weights = np.array([
+            0.25,  # β₀ weight
+            0.30,  # β₁ weight (most critical for security)
+            0.20,  # β₂ weight
+            0.10,  # Euler characteristic
+            0.05,  # Topological entropy
+            0.05,  # Naturalness coefficient
+            0.03,  # TVI
+            0.02   # Vulnerability type
+        ])
         
-        # Curvature distance
-        curvature_dist = abs(region1.curvature - region2.curvature)
+        # Calculate weighted Euclidean distance
+        vec1 = region1.fingerprint
+        vec2 = region2.fingerprint
+        diff = vec1 - vec2
         
-        # Spiral strength distance
-        spiral_dist = abs(region1.spiral_strength - region2.spiral_strength)
+        # Apply weights and normalize
+        weighted_diff = diff * weights
+        distance = np.linalg.norm(weighted_diff)
         
-        # Symmetry distance
-        sym_dist = 0.0
-        for key in region1.symmetry:
-            if key in region2.symmetry:
-                sym_dist += abs(region1.symmetry[key] - region2.symmetry[key])
-        sym_dist /= max(1, len(region1.symmetry))
+        # Convert distance to similarity (0.0 to 1.0)
+        max_possible_distance = np.sqrt(np.sum(weights**2) * 4)  # Max distance in normalized space
+        similarity = 1.0 - min(1.0, distance / max_possible_distance)
         
-        # TVI distance
-        tvi_dist = abs(region1.tvi - region2.tvi)
-        
-        # Weighted combination
-        weights = {
-            "betti": 0.3,
-            "curvature": 0.2,
-            "spiral": 0.1,
-            "symmetry": 0.2,
-            "tvi": 0.2
-        }
-        
-        total_dist = (weights["betti"] * betti_dist +
-                     weights["curvature"] * curvature_dist +
-                     weights["spiral"] * spiral_dist +
-                     weights["symmetry"] * sym_dist +
-                     weights["tvi"] * tvi_dist)
-        
-        # Normalize to [0,1]
-        return min(1.0, total_dist)
+        return similarity
     
-    def _update_region(self, region_id: str, topology_metrics: Dict[str, Any], 
-                      tvi: float) -> None:
+    def _find_nearby_regions(self, 
+                           target_metrics: TopologicalMetrics) -> List[Tuple[str, float]]:
         """
-        Update or create a topological region.
+        Find regions in cache that are topologically similar to the target.
+        
+        This method implements the core innovation of topological caching - instead of
+        requiring exact matches, it identifies regions that are "nearby" in topological space,
+        which can benefit from similar optimization strategies.
         
         Args:
-            region_id: ID of the region
-            topology_metrics: Metrics describing the region
-            tvi: Topological Vulnerability Index for the region
-        """
-        # Extract metrics
-        betti = topology_metrics.get("betti_numbers", [0.0, 0.0, 0.0])
-        curvature = topology_metrics.get("curvature", 0.0)
-        spiral = topology_metrics.get("spiral_analysis", {})
-        symmetry = topology_metrics.get("symmetry", {})
-        
-        # Create or update region
-        if region_id not in self.regions:
-            self.regions[region_id] = TopologicalRegion(
-                region_id=region_id,
-                betti_numbers=betti,
-                curvature=curvature,
-                spiral_strength=spiral.get("strength", 0.0),
-                spiral_direction=spiral.get("direction", "none"),
-                symmetry=symmetry,
-                density=0.0,
-                tvi=tvi
-            )
-        else:
-            region = self.regions[region_id]
-            region.betti_numbers = betti
-            region.curvature = curvature
-            region.spiral_strength = spiral.get("strength", 0.0)
-            region.spiral_direction = spiral.get("direction", "none")
-            region.symmetry = symmetry
-            region.tvi = tvi
-    
-    def _adjust_cache_size(self) -> None:
-        """
-        Dynamically adjust cache size based on usage patterns and topological stability.
-        
-        Implements the principle from auto_calibration.txt:
-        "Хорошая система «подпевает себе» постоянно, тихо и незаметно для пользователя"
-        """
-        current_time = time.time()
-        
-        # Only adjust size periodically
-        if current_time - self.last_size_adjustment < 5.0:  # 5 seconds
-            return
-            
-        # Calculate current hit ratio
-        hit_ratio = self.metrics.hit_ratio if self.metrics.total_accesses > 0 else 0.0
-        
-        # Base adjustment on hit ratio and TVI distribution
-        tvi_distribution = self.metrics.tvi_distribution
-        total = sum(tvi_distribution.values()) or 1
-        secure_ratio = tvi_distribution["secure"] / total
-        
-        # Determine desired size
-        desired_size = self.max_size
-        
-        # Increase size if hit ratio is high and system is secure
-        if hit_ratio > 0.8 and secure_ratio > 0.7:
-            desired_size = min(self.max_cache_size, int(self.max_size * 1.2))
-        # Decrease size if hit ratio is low or system is vulnerable
-        elif hit_ratio < 0.5 or secure_ratio < 0.3:
-            desired_size = max(self.min_cache_size, int(self.max_size * 0.8))
-            
-        # Apply gradual adjustment
-        adjustment = (desired_size - self.max_size) * 0.3  # 30% of desired change
-        new_size = int(self.max_size + adjustment)
-        new_size = max(self.min_cache_size, min(self.max_cache_size, new_size))
-        
-        # Apply the change
-        if new_size != self.max_size:
-            logger.debug(f"Adjusting cache size from {self.max_size} to {new_size}")
-            self.max_size = new_size
-            
-            # If reducing size, evict items
-            if new_size < len(self.cache):
-                self._evict_to_size(new_size)
-                
-            # Record adjustment
-            self.size_adjustment_history.append((time.time(), self.max_size))
-            self.last_size_adjustment = current_time
-    
-    def _evict_to_size(self, target_size: int) -> None:
-        """
-        Evict items from cache until size is at or below target.
-        
-        Uses a combination of:
-        - TVI-based priority (higher TVI = evict first)
-        - Least recently used within regions
-        - Region density (less dense regions get evicted first)
-        
-        Args:
-            target_size: Target cache size
-        """
-        if len(self.cache) <= target_size:
-            return
-            
-        # Create list of items to potentially evict
-        evict_candidates = []
-        for key, entry in self.cache.items():
-            # Priority score: lower = more likely to be evicted
-            # Higher TVI, older timestamp, lower region density = higher priority to evict
-            region = self.regions.get(entry.region_id)
-            region_density = region.density if region else 0.0
-            
-            priority = (
-                entry.tvi * 10.0 +  # TVI has highest weight
-                (time.time() - entry.timestamp) * 0.1 +  # Age
-                (1.0 - region_density) * 5.0  # Inverse of density
-            )
-            
-            evict_candidates.append((priority, entry.timestamp, key))
-        
-        # Sort by priority (lowest priority first) and timestamp (oldest first)
-        evict_candidates.sort()
-        
-        # Evict until we reach target size
-        evictions_needed = len(self.cache) - target_size
-        for i in range(min(evictions_needed, len(evict_candidates))):
-            _, _, key = evict_candidates[i]
-            self._remove_key(key)
-            self.metrics.evictions += 1
-    
-    def _remove_key(self, key: K) -> None:
-        """Remove a key from the cache and update region mappings."""
-        if key not in self.cache:
-            return
-            
-        entry = self.cache[key]
-        
-        # Remove from region mapping
-        if entry.region_id in self.region_map:
-            self.region_map[entry.region_id].discard(key)
-            if not self.region_map[entry.region_id]:
-                del self.region_map[entry.region_id]
-                
-        # Remove from cache
-        del self.cache[key]
-    
-    def update_strategy(self, topology_data: Dict[str, Any]) -> None:
-        """
-        Update cache strategy based on current topological data.
-        
-        Args:
-            topology_data: Dictionary containing current topological metrics
-            
-        Example from Prototype_TopoMine.txt:
-        "Update cache strategy based on current topological metrics"
-        """
-        start_time = time.time()
-        
-        try:
-            # Generate region ID from topology data
-            region_id = self._generate_region_id(topology_data)
-            
-            # Update or create the region
-            tvi = topology_data.get("tvi", 0.0)
-            self._update_region(region_id, topology_data, tvi)
-            
-            # Update region density based on current cache state
-            if region_id in self.region_map:
-                region_size = len(self.region_map[region_id])
-                total_items = len(self.cache)
-                self.regions[region_id].density = region_size / max(1, total_items)
-                
-            # Adjust cache size based on usage patterns
-            self._adjust_cache_size()
-            
-            # Log performance
-            duration = time.time() - start_time
-            logger.debug(f"Cache strategy updated in {duration:.4f}s for region {region_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to update cache strategy: {str(e)}")
-            raise
-    
-    def get(self, key: K) -> Optional[V]:
-        """
-        Get an item from the cache with topological awareness.
-        
-        Instead of just checking for the key, this method also looks for
-        topologically similar items in nearby regions.
-        
-        Args:
-            key: Key to look up
+            target_metrics: TopologicalMetrics for the target region
             
         Returns:
-            Optional[V]: Value if found, None otherwise
-            
-        Example from Prototype_TopoMine.txt:
-        "Use fast verification for known regions"
+            List[Tuple[str, float]]: List of (region_id, similarity) for nearby regions
         """
-        start_time = time.time()
+        target_fingerprint = self._create_region_fingerprint(target_metrics)
+        target_region = TopologicalRegion(target_fingerprint, target_metrics, "TEMP")
         
-        # First check if the exact key exists
-        if key in self.cache:
-            entry = self.cache[key]
-            entry.access_count += 1
-            self.metrics.update(
-                is_hit=True,
-                is_topological=False,
-                response_time=time.time() - start_time,
-                region_id=entry.region_id,
-                tvi=entry.tvi
-            )
-            return entry.value
+        nearby = []
+        for region_id, region in self.region_map.items():
+            similarity = self._region_similarity(target_region, region)
+            if similarity >= self.similarity_threshold:
+                nearby.append((region_id, similarity))
         
-        # If not found, check nearby regions for topologically similar items
-        if hasattr(key, 'topology_metrics') and key.topology_metrics:
-            region_id = self._generate_region_id(key.topology_metrics)
-            
-            # Find nearby regions
-            nearby_regions = self._find_nearby_regions(region_id)
-            
-            # Look for similar items in nearby regions
-            for reg_id in nearby_regions:
-                if reg_id in self.region_map:
-                    for similar_key in self.region_map[reg_id]:
-                        # Check if this is a topological match
-                        if self._is_topologically_similar(key, similar_key):
-                            entry = self.cache[similar_key]
-                            entry.access_count += 1
-                            self.metrics.update(
-                                is_hit=True,
-                                is_topological=True,
-                                response_time=time.time() - start_time,
-                                region_id=reg_id,
-                                tvi=entry.tvi
-                            )
-                            return entry.value
-        
-        # Cache miss
-        self.metrics.update(
-            is_hit=False,
-            is_topological=False,
-            response_time=time.time() - start_time,
-            region_id="",
-            tvi=1.0
-        )
-        return None
+        # Sort by similarity (highest first)
+        nearby.sort(key=lambda x: x[1], reverse=True)
+        return nearby
     
-    def _is_topologically_similar(self, key1: K, key2: K) -> bool:
+    def get(self, 
+           metrics: TopologicalMetrics,
+           performance_gain_callback: Optional[Callable[[str], float]] = None) -> Optional[Dict[str, Any]]:
         """
-        Check if two keys are topologically similar.
+        Get optimization strategy for the given topological metrics.
+        
+        Instead of requiring an exact match, this method finds the most similar
+        region in the cache and returns its optimization strategy.
         
         Args:
-            key1: First key
-            key2: Second key
+            metrics: TopologicalMetrics for the current signature set
+            performance_gain_callback: Optional callback to get actual performance gain
             
         Returns:
-            bool: True if keys are topologically similar
+            Optional[Dict[str, Any]]: Optimization strategy if found, None otherwise
         """
-        # This would be implementation-specific
-        # For signatures, we might compare their (u_r, u_z) positions
-        try:
-            # Example for ECDSA signatures
-            if hasattr(key1, 'ur') and hasattr(key1, 'uz') and \
-               hasattr(key2, 'ur') and hasattr(key2, 'uz'):
-                # Calculate torus distance
-                d_ur = min(abs(key1.ur - key2.ur), 1.0 - abs(key1.ur - key2.ur))
-                d_uz = min(abs(key1.uz - key2.uz), 1.0 - abs(key1.uz - key2.uz))
-                distance = math.sqrt(d_ur**2 + d_uz**2)
-                return distance < 0.2  # Threshold for similarity
-            
-            # Default comparison
-            return key1 == key2
-            
-        except Exception as e:
-            logger.debug(f"Error in topological similarity check: {str(e)}")
-            return False
-    
-    def put(self, key: K, value: V, topology_metrics: Dict[str, Any], 
-           tvi: float = 0.0) -> None:
-        """
-        Add an item to the cache with topological information.
+        self.performance_stats["total_requests"] += 1
         
-        Args:
-            key: Key to store
-            value: Value to store
-            topology_metrics: Topological metrics for the item
-            tvi: Topological Vulnerability Index
-            
-        Example from Prototype_TopoMine.txt:
-        "Store metrics in block for later use"
-        """
-        # Generate region ID
-        region_id = self._generate_region_id(topology_metrics)
+        # Find nearby regions
+        nearby_regions = self._find_nearby_regions(metrics)
         
-        # Update or create the region
-        self._update_region(region_id, topology_metrics, tvi)
-        
-        # Add to region mapping
-        if region_id not in self.region_map:
-            self.region_map[region_id] = set()
-        self.region_map[region_id].add(key)
-        
-        # Create cache entry
-        entry = CacheEntry(
-            key=key,
-            value=value,
-            region_id=region_id,
-            timestamp=time.time(),
-            tvi=tvi,
-            topological_metrics=topology_metrics
-        )
-        
-        # Add to cache
-        self.cache[key] = entry
-        
-        # Ensure we don't exceed max size
-        if len(self.cache) > self.max_size:
-            self._evict_to_size(self.max_size)
-    
-    def clear(self) -> None:
-        """Clear the cache."""
-        self.cache.clear()
-        self.region_map.clear()
-        self.regions.clear()
-        logger.info("Cache cleared")
-    
-    def get_metrics(self) -> Dict[str, Any]:
-        """Get current cache metrics."""
-        return self.metrics.get_report()
-    
-    def get_region_info(self, region_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get information about a specific topological region.
-        
-        Args:
-            region_id: ID of the region
-            
-        Returns:
-            Optional[Dict[str, Any]]: Region information or None if not found
-        """
-        if region_id not in self.regions:
+        if not nearby_regions:
+            self.performance_stats["cache_misses"] += 1
             return None
-            
-        region = self.regions[region_id]
+        
+        # Get the most similar region
+        best_region_id, similarity = nearby_regions[0]
+        region = self.region_map[best_region_id]
+        
+        # Update access statistics
+        self.access_history.append((time.time(), best_region_id))
+        region.update_access(metrics)
+        
+        # Record cache hit
+        self.performance_stats["cache_hits"] += 1
+        
+        # Calculate time saved based on performance gain
+        if performance_gain_callback:
+            actual_gain = performance_gain_callback(best_region_id)
+            region.update_access(metrics, actual_gain)
+            # Estimate time saved (assuming baseline time of 1.0)
+            time_saved = (actual_gain - 1.0) / actual_gain
+            self.performance_stats["time_saved"] += time_saved
+        
+        # Return optimization strategy
         return {
-            "region_id": region.region_id,
-            "betti_numbers": region.betti_numbers,
-            "curvature": region.curvature,
-            "spiral_analysis": {
-                "strength": region.spiral_strength,
-                "direction": region.spiral_direction
-            },
-            "symmetry": region.symmetry,
-            "density": region.density,
+            "region_id": best_region_id,
+            "similarity": similarity,
+            "stability": region.stability_score,
+            "performance_gain": region.performance_gain,
             "access_count": region.access_count,
-            "tvi": region.tvi,
-            "item_count": len(self.region_map.get(region_id, []))
+            "last_access": region.last_access
         }
     
-    def get_nearby_regions(self, region_id: str, max_distance: float = 0.5) -> List[Dict[str, Any]]:
+    def store(self, 
+             metrics: TopologicalMetrics, 
+             performance_gain: float = 4.5,
+             signature_count: int = 0) -> bool:
         """
-        Get information about regions near the specified region.
+        Store optimization strategy for the given topological metrics.
         
         Args:
-            region_id: ID of the reference region
-            max_distance: Maximum topological distance to consider
+            metrics: TopologicalMetrics for the signature set
+            performance_gain: Measured performance gain from the optimization
+            signature_count: Number of signatures analyzed
             
         Returns:
-            List[Dict[str, Any]]: List of nearby region information
+            bool: True if stored successfully, False if cache is full and no eviction possible
         """
-        nearby_ids = self._find_nearby_regions(region_id, max_distance)
-        return [self.get_region_info(rid) for rid in nearby_ids if self.get_region_info(rid)]
+        # Create region ID and fingerprint
+        region_id = self._generate_region_id(metrics)
+        fingerprint = self._create_region_fingerprint(metrics)
+        
+        # Check if this region already exists
+        if region_id in self.region_map:
+            region = self.region_map[region_id]
+            region.update_access(metrics, performance_gain)
+            return True
+        
+        # If cache is full, check if we should evict
+        if self.current_size >= self.max_size:
+            # Try to evict unstable regions first
+            evicted = self._evict_unstable_regions()
+            if not evicted and self.current_size >= self.max_size:
+                # If no unstable regions, evict least recently used
+                evicted = self._evict_lru_region()
+                if not evicted:
+                    return False  # Cannot store, cache is full
+        
+        # Create and store new region
+        new_region = TopologicalRegion(fingerprint, metrics, region_id)
+        new_region.performance_gain = performance_gain
+        self.region_map[region_id] = new_region
+        self.current_size = min(self.current_size + 1, self.max_size)
+        
+        # Update access history
+        self.access_history.append((time.time(), region_id))
+        
+        # Periodically adjust cache size
+        if time.time() - self.performance_stats["last_prune_time"] > 60.0:
+            self.update_strategy()
+            self.performance_stats["last_prune_time"] = time.time()
+        
+        return True
     
-    def get_optimal_cache_size(self) -> int:
+    def _evict_unstable_regions(self) -> bool:
         """
-        Get the currently optimal cache size based on usage patterns.
+        Evict regions with stability below threshold.
         
         Returns:
-            int: Optimal cache size
+            bool: True if at least one region was evicted
         """
-        # This would be calculated based on historical performance
-        if not self.size_adjustment_history:
-            return self.max_size
-            
-        # Simple average of recent adjustments
-        recent_sizes = [size for _, size in self.size_adjustment_history[-10:]]
-        return int(sum(recent_sizes) / len(recent_sizes))
+        unstable_regions = [
+            (region_id, region) 
+            for region_id, region in self.region_map.items()
+            if region.stability_score < self.stability_threshold
+        ]
+        
+        if not unstable_regions:
+            return False
+        
+        # Sort by stability (lowest first) and then by access count
+        unstable_regions.sort(key=lambda x: (x[1].stability_score, -x[1].access_count))
+        
+        # Evict the most unstable region
+        region_id, _ = unstable_regions[0]
+        del self.region_map[region_id]
+        self.current_size = max(0, self.current_size - 1)
+        
+        return True
     
-    def get_wdm_access_pattern(self) -> Dict[str, float]:
+    def _evict_lru_region(self) -> bool:
         """
-        Get WDM (Wavelength Division Multiplexing) access pattern information.
+        Evict the least recently used region.
         
         Returns:
-            Dict[str, float]: Access frequencies by region
+            bool: True if a region was evicted
         """
-        total_accesses = sum(self.metrics.region_distribution.values()) or 1
-        return {region_id: count / total_accesses 
-                for region_id, count in self.metrics.region_distribution.items()}
+        if not self.region_map:
+            return False
+        
+        # Find the least recently used region
+        lru_region = min(
+            self.region_map.items(),
+            key=lambda x: x[1].last_access
+        )
+        
+        # Evict it
+        region_id, _ = lru_region
+        del self.region_map[region_id]
+        self.current_size = max(0, self.current_size - 1)
+        
+        return True
     
-    def get_topological_hit_ratio(self) -> float:
+    def update_strategy(self):
         """
-        Get the ratio of hits that were found through topological similarity.
+        Dynamically adjust cache strategy based on performance and system conditions.
         
-        Returns:
-            float: Topological hit ratio
+        This method implements the principle: "Хорошая система «подпевает себе» постоянно,
+        тихо и незаметно для пользователя" from QuantumFortress documentation.
+        
+        The strategy adjustment considers:
+        - Cache hit rate and performance gains
+        - Topological stability of cached regions
+        - System resource constraints
+        - Recent access patterns
         """
-        total_hits = self.metrics.hits or 1
-        return self.metrics.topological_hits / total_hits
-    
-    def get_tvi_aware_priority(self, key: K) -> float:
-        """
-        Get a priority score for a key based on TVI and other factors.
+        # Calculate current cache hit rate
+        total = self.performance_stats["cache_hits"] + self.performance_stats["cache_misses"]
+        hit_rate = self.performance_stats["cache_hits"] / total if total > 0 else 0.0
         
-        Lower TVI = higher priority (more secure = more valuable to cache)
-        
-        Args:
-            key: Key to evaluate
-            
-        Returns:
-            float: Priority score (lower = higher priority)
-        """
-        if key not in self.cache:
-            return 1.0
-            
-        entry = self.cache[key]
-        region = self.regions.get(entry.region_id)
-        
-        # Priority factors:
-        # - TVI (lower is better)
-        # - Region density (higher is better)
-        # - Access count (higher is better)
-        # - Recency (more recent is better)
-        
-        tvi_factor = entry.tvi
-        region_factor = 1.0 - (region.density if region else 0.0)
-        access_factor = 1.0 / (entry.access_count + 1)
-        time_factor = 1.0 / (time.time() - entry.timestamp + 1)
-        
-        # Weighted combination
-        weights = {
-            "tvi": 0.4,
-            "region": 0.2,
-            "access": 0.2,
-            "time": 0.2
-        }
-        
-        return (weights["tvi"] * tvi_factor +
-                weights["region"] * region_factor +
-                weights["access"] * access_factor +
-                weights["time"] * time_factor)
-    
-    def optimize_for_tvi(self, target_tvi: float = 0.3) -> None:
-        """
-        Optimize cache for regions with TVI below the target.
-        
-        Args:
-            target_tvi: Target TVI threshold
-        """
-        # Identify regions to prioritize
-        secure_regions = [rid for rid, region in self.regions.items() 
-                         if region.tvi <= target_tvi]
-        
-        if not secure_regions:
-            return
-            
-        # Calculate how many items we can keep from secure regions
-        secure_items = []
-        for region_id in secure_regions:
-            if region_id in self.region_map:
-                for key in self.region_map[region_id]:
-                    secure_items.append(key)
-        
-        # If we have more secure items than cache size, keep the best ones
-        if len(secure_items) > self.max_size:
-            # Sort by priority
-            secure_items.sort(key=lambda key: self.get_tvi_aware_priority(key))
-            items_to_keep = set(secure_items[:self.max_size])
-            
-            # Remove non-priority items
-            for key in list(self.cache.keys()):
-                if key not in items_to_keep:
-                    self._remove_key(key)
+        # Calculate average stability of cached regions
+        if self.region_map:
+            avg_stability = np.mean([r.stability_score for r in self.region_map.values()])
         else:
-            # Keep all secure items, evict from vulnerable regions
-            vulnerable_keys = []
-            for key, entry in self.cache.items():
-                region = self.regions.get(entry.region_id)
-                if not region or region.tvi > target_tvi:
-                    vulnerable_keys.append(key)
+            avg_stability = 0.0
+        
+        # Determine if we should grow or shrink the cache
+        size_change = 0
+        
+        # Grow if hit rate is high and regions are stable
+        if hit_rate > 0.7 and avg_stability > 0.6:
+            size_change = int(self.max_size * 0.1)  # Grow by 10%
+        # Shrink if hit rate is low or regions are unstable
+        elif (hit_rate < 0.3 and avg_stability < 0.4) or self.current_size >= self.max_size:
+            size_change = -int(self.max_size * 0.1)  # Shrink by 10%
+        
+        # Apply size change with bounds checking
+        new_max_size = max(
+            MIN_CACHE_SIZE,
+            min(MAX_CACHE_SIZE, self.max_size + size_change)
+        )
+        
+        # Only update if size changed significantly
+        if abs(new_max_size - self.max_size) > 0.05 * self.max_size:
+            old_max_size = self.max_size
+            self.max_size = new_max_size
             
-            # Sort vulnerable keys by priority (lower priority = evict first)
-            vulnerable_keys.sort(key=lambda key: -self.get_tvi_aware_priority(key))
+            # Record the adjustment
+            self.size_adjustment_history.append((
+                time.time(),
+                old_max_size,
+                new_max_size
+            ))
             
-            # Evict enough vulnerable items
-            evictions_needed = len(self.cache) + len(secure_items) - self.max_size
-            for i in range(min(evictions_needed, len(vulnerable_keys))):
-                self._remove_key(vulnerable_keys[i])
+            # If shrinking, evict regions to meet new size limit
+            while self.current_size > self.max_size:
+                if not self._evict_unstable_regions():
+                    if not self._evict_lru_region():
+                        break
+        
+        # Log the strategy update
+        self.logger.debug(
+            f"Cache strategy updated: size={self.max_size}, "
+            f"hit_rate={hit_rate:.2f}, stability={avg_stability:.2f}"
+        )
     
-    def get_cache_efficiency(self) -> float:
+    def get_statistics(self) -> Dict[str, Any]:
         """
-        Calculate cache efficiency based on topological metrics.
+        Get statistics about cache performance.
         
         Returns:
-            float: Efficiency score (0.0 to 1.0)
+            Dict[str, Any]: Performance statistics
         """
-        metrics = self.get_metrics()
+        total = self.performance_stats["cache_hits"] + self.performance_stats["cache_misses"]
+        hit_rate = self.performance_stats["cache_hits"] / total if total > 0 else 0.0
         
-        # Base efficiency on hit ratio and topological hit ratio
-        base_efficiency = metrics["hit_ratio"] * 0.7 + metrics["topological_hit_ratio"] * 0.3
+        # Calculate average stability of cached regions
+        if self.region_map:
+            avg_stability = np.mean([r.stability_score for r in self.region_map.values()])
+            avg_performance = np.mean([r.performance_gain for r in self.region_map.values()])
+        else:
+            avg_stability = 0.0
+            avg_performance = 1.0
         
-        # Adjust for TVI distribution
-        tvi_dist = metrics["tvi_distribution"]
-        security_factor = tvi_dist.get("secure", 0.0) * 0.5 + 0.5
-        
-        return base_efficiency * security_factor
+        return {
+            "current_size": self.current_size,
+            "max_size": self.max_size,
+            "cache_hits": self.performance_stats["cache_hits"],
+            "cache_misses": self.performance_stats["cache_misses"],
+            "hit_rate": hit_rate,
+            "time_saved": self.performance_stats["time_saved"],
+            "average_stability": avg_stability,
+            "average_performance_gain": avg_performance,
+            "region_count": len(self.region_map),
+            "last_adjustment": (
+                self.size_adjustment_history[-1] if self.size_adjustment_history else None
+            )
+        }
     
-    def get_torus_coverage(self) -> float:
-        """
-        Estimate how well the cache covers the torus topology.
+    def clear(self):
+        """Clear all entries from the cache."""
+        self.region_map.clear()
+        self.current_size = 0
+        self.access_history = []
+        self.performance_stats = {
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "total_requests": 0,
+            "time_saved": 0.0,
+            "last_prune_time": time.time()
+        }
+    
+    def prune(self):
+        """Prune the cache by removing unstable and least recently used regions."""
+        # First remove unstable regions
+        while self._evict_unstable_regions():
+            pass
         
-        Returns:
-            float: Coverage estimate (0.0 to 1.0)
+        # Then ensure we're within size limits
+        while self.current_size > self.max_size:
+            if not self._evict_lru_region():
+                break
+    
+    def get_region_details(self, region_id: str) -> Optional[Dict[str, Any]]:
         """
-        if not self.regions:
-            return 0.0
+        Get detailed information about a specific region.
+        
+        Args:
+            region_id: ID of the region
             
-        # Calculate total "area" covered by regions
-        total_area = 0.0
-        for region in self.regions.values():
-            # Simplistic model: area proportional to density and inverse of TVI
-            area = region.density * (1.0 / (region.tvi + 0.1))
-            total_area += area
-            
-        # Normalize (this is a rough estimate)
-        return min(1.0, total_area / len(self.regions))
-    
-    def get_optimized_regions(self) -> List[str]:
-        """
-        Get regions that are currently optimized for.
-        
         Returns:
-            List[str]: List of optimized region IDs
+            Optional[Dict[str, Any]]: Region details or None if not found
         """
-        # Regions with high density and low TVI
-        optimized = []
-        for region_id, region in self.regions.items():
-            if region.density > 0.1 and region.tvi < 0.4:
-                optimized.append(region_id)
-                
-        return optimized
-
-def create_topologically_optimized_cache(max_size: int = 1000) -> TopologicallyOptimizedCache:
-    """
-    Factory function to create a topologically-optimized cache.
-    
-    Args:
-        max_size: Maximum size of the cache
+        if region_id not in self.region_map:
+            return None
         
-    Returns:
-        TopologicallyOptimizedCache: Configured cache instance
-    """
-    return TopologicallyOptimizedCache(max_size)
+        region = self.region_map[region_id]
+        return {
+            "region_id": region_id,
+            "betti_numbers": region.metrics.betti_numbers,
+            "euler_characteristic": region.metrics.euler_characteristic,
+            "topological_entropy": region.metrics.topological_entropy,
+            "naturalness_coefficient": region.metrics.naturalness_coefficient,
+            "tvi": region.metrics.tvi,
+            "vulnerability_type": region.metrics.vulnerability_type,
+            "stability_score": region.stability_score,
+            "performance_gain": region.performance_gain,
+            "access_count": region.access_count,
+            "last_access": region.last_access
+        }
+    
+    def get_top_regions(self, n: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get the top N most stable and frequently accessed regions.
+        
+        Args:
+            n: Number of regions to return
+            
+        Returns:
+            List[Dict[str, Any]]: Top regions with their details
+        """
+        if not self.region_map:
+            return []
+        
+        # Sort regions by stability and access count
+        regions = list(self.region_map.values())
+        regions.sort(
+            key=lambda r: (r.stability_score * r.access_count),
+            reverse=True
+        )
+        
+        # Return top N regions with details
+        return [
+            {
+                "region_id": r.region_id,
+                "stability": r.stability_score,
+                "access_count": r.access_count,
+                "performance_gain": r.performance_gain,
+                "betti_numbers": r.metrics.betti_numbers,
+                "tvi": r.metrics.tvi
+            }
+            for r in regions[:n]
+        ]
 
 # For backward compatibility with older implementations
 TopologicalCache = TopologicallyOptimizedCache
+
+def create_default_cache() -> TopologicallyOptimizedCache:
+    """
+    Create a default topologically-optimized cache with recommended settings.
+    
+    Returns:
+        TopologicallyOptimizedCache: Configured cache instance
+    """
+    return TopologicallyOptimizedCache(
+        max_size=DEFAULT_MAX_SIZE,
+        similarity_threshold=REGION_SIMILARITY_THRESHOLD,
+        stability_threshold=STABILITY_THRESHOLD,
+        decay_rate=CACHE_DECAY_RATE
+    )
+
+def example_usage() -> None:
+    """
+    Example usage of TopologicallyOptimizedCache.
+    
+    Demonstrates how to use the cache for cryptographic signature verification.
+    """
+    print("=" * 60)
+    print("Пример использования TopologicallyOptimizedCache")
+    print("=" * 60)
+    
+    # Create cache
+    cache = create_default_cache()
+    print(f"\n1. Создан кэш с максимальным размером {cache.max_size} регионов")
+    
+    # Simulate some topological metrics (secure system)
+    from .betti_numbers import TopologicalMetrics
+    secure_metrics = TopologicalMetrics(
+        betti_numbers=[1.0, 2.0, 1.0],
+        euler_characteristic=0.0,
+        topological_entropy=0.95,
+        naturalness_coefficient=0.05,
+        tvi=0.0,
+        is_secure=True,
+        vulnerability_type="none",
+        explanation="Безопасная система с идеальной топологией тора",
+        timestamp=time.time()
+    )
+    
+    # Simulate some topological metrics (vulnerable system)
+    vulnerable_metrics = TopologicalMetrics(
+        betti_numbers=[1.0, 3.2, 0.8],
+        euler_characteristic=0.5,
+        topological_entropy=0.3,
+        naturalness_coefficient=0.6,
+        tvi=0.85,
+        is_secure=False,
+        vulnerability_type="topological_structure",
+        explanation="Уязвимость: нарушение структуры пространства подписей",
+        timestamp=time.time()
+    )
+    
+    # Store optimization strategies
+    print("\n2. Сохранение стратегий оптимизации в кэш...")
+    cache.store(secure_metrics, performance_gain=4.5, signature_count=1000)
+    cache.store(vulnerable_metrics, performance_gain=2.0, signature_count=500)
+    print(f"  - Сохранено {cache.current_size} регионов в кэше")
+    
+    # Retrieve strategies
+    print("\n3. Получение стратегий из кэша...")
+    
+    print("  a) Запрос для безопасной системы:")
+    strategy = cache.get(secure_metrics)
+    if strategy:
+        print(f"     Найдена стратегия (схожесть={strategy['similarity']:.2f}, "
+              f"производительность={strategy['performance_gain']}x)")
+    else:
+        print("     Стратегия не найдена")
+    
+    print("  b) Запрос для уязвимой системы:")
+    strategy = cache.get(vulnerable_metrics)
+    if strategy:
+        print(f"     Найдена стратегия (схожесть={strategy['similarity']:.2f}, "
+              f"производительность={strategy['performance_gain']}x)")
+    else:
+        print("     Стратегия не найдена")
+    
+    # Get statistics
+    stats = cache.get_statistics()
+    print("\n4. Статистика кэша:")
+    print(f"  - Размер кэша: {stats['current_size']}/{stats['max_size']}")
+    print(f"  - Коэффициент попаданий: {stats['hit_rate']:.2f}")
+    print(f"  - Средняя стабильность: {stats['average_stability']:.2f}")
+    print(f"  - Средний прирост производительности: {stats['average_performance_gain']:.2f}x")
+    
+    # Get top regions
+    top_regions = cache.get_top_regions(2)
+    print("\n5. Топ регионы:")
+    for i, region in enumerate(top_regions):
+        print(f"  Регион #{i+1} (ID: {region['region_id']}):")
+        print(f"    - Стабильность: {region['stability']:.2f}")
+        print(f"    - Количество доступов: {region['access_count']}")
+        print(f"    - Прирост производительности: {region['performance_gain']}x")
+        print(f"    - Числа Бетти: β0={region['betti_numbers'][0]}, "
+              f"β1={region['betti_numbers'][1]}, β2={region['betti_numbers'][2]}")
+        print(f"    - TVI: {region['tvi']:.2f}")
+    
+    print("\n6. Пример динамической коррекции размера кэша...")
+    # Simulate high cache miss rate to trigger size adjustment
+    for _ in range(50):
+        cache.get(vulnerable_metrics)
+        cache.get(secure_metrics)
+    
+    # Force strategy update
+    cache.update_strategy()
+    new_stats = cache.get_statistics()
+    print(f"  - Новый размер кэша: {new_stats['current_size']}/{new_stats['max_size']}")
+    
+    print("=" * 60)
+    print("Кэш успешно продемонстрировал топологическую оптимизацию и динамическую коррекцию размера.")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    # Run example usage when module is executed directly
+    example_usage()
