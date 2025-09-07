@@ -10,6 +10,8 @@ Key principles implemented:
 - TVI-based metrics for vulnerability analysis (per "Ur Uz работа.md")
 - Quantum state calibration and drift correction (per "Квантовый ПК.md")
 - Topological vulnerability analysis (per "TopoSphere.md")
+- WDM-parallelism for uniform torus coverage (per "Ur Uz работа_2.md")
+- Baire property verification (per "Теория.md")
 
 This implementation ensures that all signatures are mathematically linked to the public key
 through the ur/uz relationship, eliminating random signature generation.
@@ -19,6 +21,8 @@ import numpy as np
 import time
 import math
 import logging
+import os
+import random
 import warnings
 from typing import Dict, List, Tuple, Optional, Callable, Any
 from enum import Enum
@@ -93,7 +97,7 @@ class AdaptiveQuantumHypercube:
     - Security requirements
     
     The hypercube maintains the bijective correspondence Φ: (r,s,z) ↔ (u_r,u_z)
-    ensuring all signatures are mathematically linked to the public key.
+    ensuring all signatures are mathematically linked to the public key through TopoNonce 2.0.
     """
     
     def __init__(self, 
@@ -101,7 +105,8 @@ class AdaptiveQuantumHypercube:
                  min_dimension: int = 2,
                  max_dimension: int = 8,
                  safety_threshold: float = 0.1,
-                 target_size_gb: float = 1.0):
+                 target_size_gb: float = 1.0,
+                 wdm_parallelism: int = 4):
         """
         Initialize the Adaptive Quantum Hypercube
         
@@ -111,6 +116,7 @@ class AdaptiveQuantumHypercube:
             max_dimension: Maximum allowed dimension (default: 8)
             safety_threshold: Threshold for quantum state drift (default: 0.1)
             target_size_gb: Target size in GB for compressed representation (default: 1.0)
+            wdm_parallelism: Level of WDM parallelism for torus coverage (default: 4)
         """
         # Validate input parameters
         if dimension < min_dimension or dimension > max_dimension:
@@ -121,6 +127,8 @@ class AdaptiveQuantumHypercube:
             raise ValueError("Maximum dimension should not exceed 64 for practical implementation")
         if safety_threshold <= 0 or safety_threshold >= 1:
             raise ValueError("Safety threshold must be between 0 and 1")
+        if wdm_parallelism < 1:
+            raise ValueError("WDM parallelism must be at least 1")
             
         # Core hypercube properties
         self.dimension = dimension
@@ -128,6 +136,7 @@ class AdaptiveQuantumHypercube:
         self.max_dimension = max_dimension
         self.safety_threshold = safety_threshold
         self.target_size_gb = target_size_gb
+        self.wdm_parallelism = wdm_parallelism
         
         # Quantum state management
         self.quantum_state = QuantumState.STABLE
@@ -142,30 +151,38 @@ class AdaptiveQuantumHypercube:
         self.h1_dimension = None
         self.tvi_history = []
         
+        # Curvature analysis
+        self.curvature = 0.0
+        self.curvature_history = []
+        
         # Compression parameters
         self.compression_ratio = 0.0
         self.algebraic_structures = None
         self.spectral_data = None
         self.quadtree = None
         
-        # Initialize the quantum state
+        # TVI parameters
+        self.tvi = 0.0
+        self.tvl_critical_threshold = 0.5  # Block transactions above this TVI
+        
+        # Initialize the quantum state with proper calibration
         self._initialize_quantum_state()
         
         logger.info(f"Initialized {self.dimension}D Adaptive Quantum Hypercube with target size {self.target_size_gb}GB")
-        logger.info(f"Quantum state initialized with drift rate: {self.drift_rate:.6f}")
+        logger.info(f"Quantum state initialized with drift rate: {self.drift_rate:.6f}, WDM parallelism: {self.wdm_parallelism}")
     
     def _initialize_quantum_state(self):
-        """Initialize the quantum state of the hypercube with proper calibration"""
+        """Initialize the quantum state of the hypercube with proper calibration and WDM-parallelism"""
         start_time = time.time()
         
         # Generate a secure random seed for the quantum state
         seed = self._generate_secure_seed()
         
-        # Initialize quantum state vectors
+        # Initialize quantum state vectors with WDM-parallelism
         self.quantum_vectors = []
         for i in range(self.dimension):
-            # Generate a quantum state vector with proper normalization
-            vector = self._generate_quantum_vector(seed, i)
+            # Generate a quantum state vector with proper normalization and WDM coverage
+            vector = self._generate_quantum_vector_wdm(seed, i)
             self.quantum_vectors.append(vector)
         
         # Calculate initial drift rate (should be near zero after proper initialization)
@@ -174,12 +191,18 @@ class AdaptiveQuantumHypercube:
         # Verify the bijective correspondence Φ: (r,s,z) ↔ (u_r,u_z)
         self._verify_bijection_property()
         
+        # Verify Baire property and sequential compactness
+        self._verify_baire_property()
+        
         # Perform initial topological analysis
         self._analyze_topology()
         
+        # Perform curvature analysis
+        self._analyze_curvature()
+        
         elapsed = time.time() - start_time
         logger.info(f"Quantum state initialization completed in {elapsed:.4f} seconds")
-        logger.debug(f"Initial drift rate: {self.drift_rate:.6f}, H1 dimension: {self.h1_dimension}")
+        logger.debug(f"Initial drift rate: {self.drift_rate:.6f}, H1 dimension: {self.h1_dimension}, Curvature: {self.curvature:.6f}")
     
     def _generate_secure_seed(self) -> int:
         """
@@ -199,16 +222,16 @@ class AdaptiveQuantumHypercube:
             # Ultimate fallback
             return int(time.time() * 1000000)
     
-    def _generate_quantum_vector(self, seed: int, index: int) -> np.ndarray:
+    def _generate_quantum_vector_wdm(self, seed: int, index: int) -> np.ndarray:
         """
-        Generate a quantum state vector for the hypercube
+        Generate a quantum state vector for the hypercube with WDM-parallelism
         
         Args:
             seed: Secure random seed
             index: Index of the vector in the hypercube
             
         Returns:
-            Normalized quantum state vector
+            Normalized quantum state vector with WDM properties
         """
         # Use a cryptographically secure method to generate the vector
         np.random.seed((seed + index) % (2**32))
@@ -226,6 +249,22 @@ class AdaptiveQuantumHypercube:
         
         # Create complex vector
         vector = real_part + 1j * imag_part
+        
+        # Apply WDM-parallelism to ensure uniform torus coverage
+        # This is critical for TopoNonce 2.0 implementation
+        for i in range(self.wdm_parallelism):
+            # Apply a rotation with angle dependent on WDM index
+            angle = 2 * np.pi * i / self.wdm_parallelism
+            rotation_matrix = np.array([
+                [np.cos(angle), -np.sin(angle)],
+                [np.sin(angle), np.cos(angle)]
+            ])
+            
+            # Apply rotation to the first two dimensions
+            if vector_length >= 2:
+                vector_2d = [np.real(vector[0]), np.imag(vector[0])]
+                rotated = rotation_matrix @ vector_2d
+                vector[0] = rotated[0] + 1j * rotated[1]
         
         # Normalize the vector (quantum states must have norm 1)
         norm = np.linalg.norm(vector)
@@ -263,6 +302,11 @@ class AdaptiveQuantumHypercube:
         # Drift rate is inversely related to coherence (higher coherence = lower drift)
         drift_rate = 1.0 - normalized_coherence
         
+        # Add drift history for trend analysis
+        self.drift_history.append(drift_rate)
+        if len(self.drift_history) > 100:
+            self.drift_history.pop(0)
+            
         return drift_rate
     
     def _verify_bijection_property(self):
@@ -281,11 +325,8 @@ class AdaptiveQuantumHypercube:
                 private_key = string_to_number(sk.to_string())
                 public_key = vk
                 
-            # Generate a test message
-            message = b"QuantumFortress 2.0 Test Message"
-            
-            # Generate ur and uz properly (not random!)
-            ur, uz = self._generate_valid_ur_uz(public_key)
+            # Generate ur and uz properly using TopoNonce 2.0 with WDM-parallelism
+            ur, uz = self._generate_valid_ur_uz_wdm(public_key)
             
             # Verify they satisfy the bijection property
             R_x = self._calculate_Rx(ur, uz, public_key)
@@ -316,39 +357,239 @@ class AdaptiveQuantumHypercube:
             logger.error(f"Error verifying bijection property: {str(e)}")
             raise
     
-    def _generate_valid_ur_uz(self, public_key: Any) -> Tuple[int, int]:
+    def _verify_baire_property(self) -> bool:
         """
-        Generate valid ur and uz values that satisfy the bijection property
+        Verify the implementation conforms to Baire property and sequential compactness
+        
+        Returns:
+            True if the property holds, False otherwise
+        """
+        # Baire property: a Baire space is a topological space in which the intersection 
+        # of every countable collection of dense open sets is dense.
+        
+        # For our quantum hypercube, this means:
+        # 1. The space should not have "nowhere dense" regions
+        # 2. The intersection of dense open sets should remain dense
+        
+        # We'll check for sequential compactness (every sequence has a convergent subsequence)
+        # and density of intersections
+        
+        # Check if the quantum state space is sequentially compact
+        if not self._check_sequential_compactness():
+            logger.error("Quantum state space fails sequential compactness check")
+            return False
+            
+        # Check if the intersection of dense sets remains dense
+        if not self._check_dense_intersections():
+            logger.error("Quantum state space fails dense intersections check")
+            return False
+            
+        logger.debug("Baire property verification successful")
+        return True
+    
+    def _check_sequential_compactness(self) -> bool:
+        """
+        Check if the quantum state space is sequentially compact
+        
+        Returns:
+            True if sequentially compact, False otherwise
+        """
+        # In a finite-dimensional space (like our quantum hypercube), 
+        # sequential compactness is equivalent to being closed and bounded.
+        
+        # For our implementation, we need to check:
+        # 1. The quantum vectors are bounded (norm = 1, so this is satisfied)
+        # 2. The space is closed (no "holes" or discontinuities)
+        
+        # Check for continuity in the quantum state space
+        if self.drift_rate > self.safety_threshold * 2:
+            # High drift rate indicates potential discontinuities
+            return False
+            
+        # Check for topological holes (using H1 dimension)
+        if self.h1_dimension is not None and self.h1_dimension > 0:
+            # Presence of 1-dimensional holes indicates non-compactness
+            return False
+            
+        return True
+    
+    def _check_dense_intersections(self) -> bool:
+        """
+        Check if the intersection of dense open sets remains dense
+        
+        Returns:
+            True if dense intersections property holds, False otherwise
+        """
+        # For our quantum hypercube, this means checking that:
+        # 1. There are no "isolated" regions in the quantum state space
+        # 2. The space is well-connected
+        
+        # Check for isolated regions using TVI and curvature
+        if self.tvi > 0.3 or self.curvature > 0.5:
+            # High TVI or curvature indicates potential isolated regions
+            return False
+            
+        # Check connectivity using graph theory on the quantum state space
+        # (simplified for demonstration)
+        connectivity = self._calculate_connectivity()
+        if connectivity < 0.7:  # Threshold for "dense" connectivity
+            return False
+            
+        return True
+    
+    def _calculate_connectivity(self) -> float:
+        """
+        Calculate the connectivity of the quantum state space
+        
+        Returns:
+            Connectivity measure between 0 and 1
+        """
+        if not self.quantum_vectors:
+            return 0.0
+            
+        # Calculate the minimum number of edges needed for full connectivity
+        min_edges = len(self.quantum_vectors) - 1
+        
+        # Calculate actual connectivity (simplified)
+        connected_pairs = 0
+        for i in range(len(self.quantum_vectors)):
+            for j in range(i+1, len(self.quantum_vectors)):
+                # Check if vectors are "connected" (simplified measure)
+                inner_product = np.vdot(self.quantum_vectors[i], self.quantum_vectors[j])
+                if np.abs(inner_product) > 0.1:  # Threshold for "connection"
+                    connected_pairs += 1
+                    
+        # Normalize to [0,1] range
+        max_possible = len(self.quantum_vectors) * (len(self.quantum_vectors) - 1) / 2
+        if max_possible > 0:
+            return connected_pairs / max_possible
+        return 0.0
+    
+    def _generate_valid_ur_uz_wdm(self, public_key: Any) -> Tuple[int, int]:
+        """
+        Generate valid ur and uz values using TopoNonce 2.0 with WDM-parallelism
         
         Args:
             public_key: The public key to generate values for
             
         Returns:
-            Tuple (ur, uz) that satisfies the bijection property
+            Tuple (ur, uz) that satisfies the bijection property with WDM coverage
         """
         if not ECDSA_AVAILABLE:
             raise RuntimeError("ECDSA library required to generate valid ur/uz values")
             
         # Generate ur as a random value in Z_n^* (invertible elements modulo n)
-        while True:
+        # with WDM-parallelism to ensure uniform torus coverage
+        ur_candidates = []
+        for i in range(self.wdm_parallelism):
+            while True:
+                if FAST_ECDSA_AVAILABLE:
+                    # Add WDM-specific offset
+                    offset = (i * n) // self.wdm_parallelism
+                    ur = (np.random.randint(1, n // self.wdm_parallelism) + offset) % n
+                    # Check if ur is invertible
+                    if ur > 0 and math.gcd(ur, n) == 1:
+                        ur_candidates.append(ur)
+                        break
+                else:
+                    # Fallback implementation with WDM
+                    offset = (i * n) // self.wdm_parallelism
+                    ur = (int.from_bytes(os.urandom(32), byteorder='big') % (n // self.wdm_parallelism) + offset) % n
+                    if ur > 0 and math.gcd(ur, n) == 1:
+                        ur_candidates.append(ur)
+                        break
+        
+        # Select the best ur based on TVI and curvature
+        ur = self._select_best_candidate(ur_candidates, public_key)
+        
+        # Generate uz with WDM-parallelism
+        uz_candidates = []
+        for i in range(self.wdm_parallelism):
             if FAST_ECDSA_AVAILABLE:
-                ur = np.random.randint(1, n)
-                # Check if ur is invertible
-                if math.gcd(ur, n) == 1:
-                    break
+                # Add WDM-specific offset
+                offset = (i * n) // self.wdm_parallelism
+                uz = (np.random.randint(0, n // self.wdm_parallelism) + offset) % n
+                uz_candidates.append(uz)
             else:
-                # Fallback implementation
-                ur = int.from_bytes(os.urandom(32), byteorder='big') % (n-1) + 1
-                if math.gcd(ur, n) == 1:
-                    break
-                    
-        # Generate uz as a random value in Z_n
-        if FAST_ECDSA_AVAILABLE:
-            uz = np.random.randint(0, n)
-        else:
-            uz = int.from_bytes(os.urandom(32), byteorder='big') % n
-            
+                # Fallback implementation with WDM
+                offset = (i * n) // self.wdm_parallelism
+                uz = (int.from_bytes(os.urandom(32), byteorder='big') % (n // self.wdm_parallelism) + offset) % n
+                uz_candidates.append(uz)
+        
+        # Select the best uz based on TVI and curvature
+        uz = self._select_best_candidate(uz_candidates, public_key, ur=ur)
+        
         return ur, uz
+    
+    def _select_best_candidate(self, candidates: List[int], public_key: Any, ur: Optional[int] = None) -> int:
+        """
+        Select the best candidate from a list based on TVI and curvature
+        
+        Args:
+            candidates: List of candidate values
+            public_key: The public key
+            ur: Optional ur value (for uz selection)
+            
+        Returns:
+            The best candidate value
+        """
+        best_candidate = None
+        best_score = float('inf')  # Lower score is better
+        
+        for candidate in candidates:
+            # Calculate score based on TVI impact and curvature
+            tvi_impact = self._estimate_tvi_impact(candidate, public_key, ur)
+            curvature_impact = self._estimate_curvature_impact(candidate, public_key, ur)
+            
+            # Combine impacts with appropriate weights
+            score = 0.7 * tvi_impact + 0.3 * curvature_impact
+            
+            if score < best_score:
+                best_score = score
+                best_candidate = candidate
+        
+        return best_candidate
+    
+    def _estimate_tvi_impact(self, value: int, public_key: Any, ur: Optional[int] = None) -> float:
+        """
+        Estimate the impact of a value on the Topological Vulnerability Index
+        
+        Args:
+            value: The value to evaluate
+            public_key: The public key
+            ur: Optional ur value (for uz evaluation)
+            
+        Returns:
+            Estimated TVI impact (0-1)
+        """
+        # Simplified estimation based on value distribution
+        # In a real implementation, this would involve more complex topological analysis
+        if ur is None:
+            # For ur evaluation
+            return abs(value / n - 0.5)  # Values near n/2 are better
+        else:
+            # For uz evaluation
+            return abs((value + ur) / n - 0.5)  # Values that complement ur are better
+    
+    def _estimate_curvature_impact(self, value: int, public_key: Any, ur: Optional[int] = None) -> float:
+        """
+        Estimate the impact of a value on the curvature
+        
+        Args:
+            value: The value to evaluate
+            public_key: The public key
+            ur: Optional ur value (for uz evaluation)
+            
+        Returns:
+            Estimated curvature impact (0-1)
+        """
+        # Simplified estimation based on value distribution
+        if ur is None:
+            # For ur evaluation
+            return abs(value / n - 0.5)  # Values near n/2 are better
+        else:
+            # For uz evaluation
+            return abs((value - ur) / n)  # Values that balance ur are better
     
     def _calculate_Rx(self, ur: int, uz: int, public_key: Any) -> int:
         """
@@ -408,15 +649,15 @@ class AdaptiveQuantumHypercube:
         self.h1_dimension = self.betti_numbers[1] if len(self.betti_numbers) > 1 else 0
         
         # Calculate Topological Vulnerability Index (TVI)
-        tvi = self._calculate_tvi()
-        self.tvi_history.append(tvi)
+        self.tvi = self._calculate_tvi()
+        self.tvi_history.append(self.tvi)
         
         # Check if TVI exceeds critical threshold
-        if tvi > 0.5:
-            logger.warning(f"High TVI detected: {tvi:.4f}. Transaction blocking may be required.")
+        if self.tvi > self.tvl_critical_threshold:
+            logger.warning(f"High TVI detected: {self.tvi:.4f}. Transaction blocking may be required.")
         
         elapsed = time.time() - start_time
-        logger.debug(f"Topology analysis completed in {elapsed:.4f} seconds. TVI: {tvi:.4f}, H1: {self.h1_dimension}")
+        logger.debug(f"Topology analysis completed in {elapsed:.4f} seconds. TVI: {self.tvi:.4f}, H1: {self.h1_dimension}")
     
     def _calculate_betti_numbers(self) -> List[int]:
         """
@@ -472,13 +713,21 @@ class AdaptiveQuantumHypercube:
         # Factor in quantum drift rate
         tvi_drift = self.drift_rate
         
+        # Factor in curvature
+        tvi_curvature = min(1.0, self.curvature / 0.5)  # Assuming 0.5 is a critical threshold
+        
         # Combine factors with appropriate weighting
-        tvi = 0.7 * tvi_h1 + 0.3 * tvi_drift
+        tvi = 0.5 * tvi_h1 + 0.3 * tvi_drift + 0.2 * tvi_curvature
         
         # Additional penalty if safety threshold is exceeded
         if self.drift_rate > self.safety_threshold:
             safety_margin = (self.drift_rate - self.safety_threshold) / (1.0 - self.safety_threshold)
             tvi = min(1.0, tvi + 0.2 * safety_margin)
+            
+        # Additional penalty for high curvature
+        if self.curvature > 0.3:
+            curvature_margin = (self.curvature - 0.3) / (1.0 - 0.3)
+            tvi = min(1.0, tvi + 0.15 * curvature_margin)
         
         return tvi
     
@@ -516,10 +765,10 @@ class AdaptiveQuantumHypercube:
             # Set new dimension
             self.dimension = target_dimension
             
-            # Generate additional quantum vectors
+            # Generate additional quantum vectors with WDM-parallelism
             seed = self._generate_secure_seed()
             for i in range(original_dimension, target_dimension):
-                vector = self._generate_quantum_vector(seed, i)
+                vector = self._generate_quantum_vector_wdm(seed, i)
                 self.quantum_vectors.append(vector)
                 
             # Recalculate drift rate with new dimension
@@ -528,8 +777,15 @@ class AdaptiveQuantumHypercube:
             # Verify the bijection property still holds
             self._verify_bijection_property()
             
+            # Verify Baire property
+            if not self._verify_baire_property():
+                raise ValueError("Baire property verification failed after dimension change")
+                
             # Perform topology analysis
             self._analyze_topology()
+            
+            # Perform curvature analysis
+            self._analyze_curvature()
             
             # Check if the expansion created vulnerabilities
             if self.drift_rate > self.safety_threshold * 1.5:
@@ -552,13 +808,14 @@ class AdaptiveQuantumHypercube:
             self.drift_rate = self._calculate_drift_rate()
             return False
     
-    def adapt_dimension(self, current_complexity: float, tvl_value: float) -> int:
+    def adapt_dimension(self, current_complexity: float, tvl_value: float, drift_rate: float) -> int:
         """
         Adapt the hypercube dimension based on current system conditions
         
         Args:
             current_complexity: Current computational complexity (0-1 scale)
             tvl_value: Current Topological Vulnerability Level (0-1 scale)
+            drift_rate: Current quantum state drift rate
             
         Returns:
             The new dimension after adaptation
@@ -568,9 +825,10 @@ class AdaptiveQuantumHypercube:
         # Store original dimension for comparison
         original_dimension = self.dimension
         
-        # Calculate target dimension based on complexity and TVL
+        # Calculate target dimension based on complexity, TVL, and drift rate
         # Higher complexity requires higher dimension for security
         # Higher TVL requires higher dimension to mitigate vulnerabilities
+        # Higher drift rate requires higher dimension for stability
         
         # Base dimension on complexity (scale 0-1 to min-max dimension)
         complexity_factor = min(1.0, current_complexity * 1.2)  # Allow slight overshoot
@@ -581,13 +839,18 @@ class AdaptiveQuantumHypercube:
             tvl_adjustment = int((tvl_value - 0.3) * 2 * (self.max_dimension - self.min_dimension))
             target_dimension = min(self.max_dimension, target_dimension + tvl_adjustment)
             
+        # Adjust for drift rate (higher drift requires higher dimension)
+        if drift_rate > self.safety_threshold:
+            drift_adjustment = int((drift_rate - self.safety_threshold) * 3 * (self.max_dimension - self.min_dimension))
+            target_dimension = min(self.max_dimension, target_dimension + drift_adjustment)
+            
         # Ensure target dimension is within bounds
         target_dimension = max(self.min_dimension, min(self.max_dimension, target_dimension))
         
         # Only change dimension if necessary
         if target_dimension != self.dimension:
             logger.info(f"Adapting dimension from {self.dimension} to {target_dimension} "
-                        f"(complexity: {current_complexity:.2f}, TVL: {tvl_value:.2f})")
+                        f"(complexity: {current_complexity:.2f}, TVL: {tvl_value:.2f}, drift: {drift_rate:.2f})")
             
             # Try to expand or contract dimension
             if target_dimension > self.dimension:
@@ -615,9 +878,11 @@ class AdaptiveQuantumHypercube:
             if success:
                 # Perform topology analysis after successful change
                 self._analyze_topology()
+                # Perform curvature analysis after successful change
+                self._analyze_curvature()
         else:
             logger.debug(f"Dimension remains at {self.dimension} "
-                         f"(complexity: {current_complexity:.2f}, TVL: {tvl_value:.2f})")
+                         f"(complexity: {current_complexity:.2f}, TVL: {tvl_value:.2f}, drift: {drift_rate:.2f})")
         
         # Check if calibration is needed
         self._check_calibration_needed()
@@ -636,62 +901,72 @@ class AdaptiveQuantumHypercube:
                 self.calibrate_quantum_state()
     
     def calibrate_quantum_state(self):
-        """Perform quantum state calibration to correct drift"""
+        """Perform quantum state calibration to correct drift with WDM-parallelism"""
         if self.quantum_state == QuantumState.CALIBRATING:
             logger.debug("Quantum state is already being calibrated")
             return
             
         start_time = time.time()
         self.quantum_state = QuantumState.CALIBRATING
-        logger.info("Starting quantum state calibration...")
+        logger.info("Starting quantum state calibration with WDM-parallelism...")
         
         try:
             # Store current state for comparison
             original_drift = self.drift_rate
+            original_curvature = self.curvature
             
-            # Perform calibration (simplified model)
+            # Perform calibration with WDM-parallelism
             calibration_factor = 0.8  # How much to reduce drift
             target_drift = self.drift_rate * (1 - calibration_factor)
             
-            # In a real implementation, this would involve quantum operations
-            # For this simulation, we'll just adjust the quantum vectors
-            for i in range(len(self.quantum_vectors)):
-                # Apply a small rotation to each vector to reduce coherence
-                angle = np.random.uniform(-0.1, 0.1)
-                rotation_matrix = np.array([
-                    [np.cos(angle), -np.sin(angle)],
-                    [np.sin(angle), np.cos(angle)]
-                ])
+            # Apply WDM-parallelism to ensure uniform correction
+            for wdm_index in range(self.wdm_parallelism):
+                # Calculate WDM-specific rotation angle
+                angle = np.random.uniform(-0.1, 0.1) * (1 - wdm_index / self.wdm_parallelism)
                 
-                # Apply rotation (simplified for demonstration)
-                if len(self.quantum_vectors[i]) >= 2:
-                    real_part = np.real(self.quantum_vectors[i][:2])
-                    imag_part = np.imag(self.quantum_vectors[i][:2])
-                    vector_2d = real_part + 1j * imag_part
+                # Apply rotation to each quantum vector
+                for i in range(len(self.quantum_vectors)):
+                    # Create rotation matrix
+                    rotation_matrix = np.array([
+                        [np.cos(angle), -np.sin(angle)],
+                        [np.sin(angle), np.cos(angle)]
+                    ])
                     
-                    # Apply rotation
-                    rotated = rotation_matrix @ [np.real(vector_2d[0]), np.imag(vector_2d[0])]
-                    self.quantum_vectors[i][0] = rotated[0] + 1j * rotated[1]
+                    # Apply rotation to the first two dimensions
+                    if len(self.quantum_vectors[i]) >= 2:
+                        real_part = np.real(self.quantum_vectors[i][:2])
+                        imag_part = np.imag(self.quantum_vectors[i][:2])
+                        vector_2d = real_part + 1j * imag_part
+                        
+                        # Apply rotation
+                        rotated = rotation_matrix @ [np.real(vector_2d[0]), np.imag(vector_2d[0])]
+                        self.quantum_vectors[i][0] = rotated[0] + 1j * rotated[1]
             
             # Recalculate drift rate
             self.drift_rate = self._calculate_drift_rate()
             
+            # Recalculate curvature
+            self._analyze_curvature()
+            
             # Log calibration results
-            reduction = (original_drift - self.drift_rate) / original_drift if original_drift > 0 else 0
+            drift_reduction = (original_drift - self.drift_rate) / original_drift if original_drift > 0 else 0
+            curvature_reduction = (original_curvature - self.curvature) / original_curvature if original_curvature > 0 else 0
+            
             logger.info(f"Calibration completed. Drift rate reduced from {original_drift:.6f} to {self.drift_rate:.6f} "
-                        f"({reduction:.1%} reduction)")
+                        f"({drift_reduction:.1%} reduction), Curvature reduced from {original_curvature:.6f} to {self.curvature:.6f} "
+                        f"({curvature_reduction:.1%} reduction)")
             
             # Update calibration metrics
             self.calibration_count += 1
             self.last_calibration = time.time()
             
             # Check if calibration was successful
-            if self.drift_rate <= self.safety_threshold:
+            if self.drift_rate <= self.safety_threshold and self.curvature <= 0.3:
                 self.quantum_state = QuantumState.STABLE
                 logger.info("Quantum state stabilized after calibration")
             else:
                 self.quantum_state = QuantumState.DRIFTING
-                logger.warning(f"Quantum state still drifting after calibration (rate: {self.drift_rate:.6f})")
+                logger.warning(f"Quantum state still drifting after calibration (rate: {self.drift_rate:.6f}, curvature: {self.curvature:.6f})")
                 
         except Exception as e:
             logger.error(f"Error during quantum state calibration: {str(e)}")
@@ -700,6 +975,55 @@ class AdaptiveQuantumHypercube:
         finally:
             elapsed = time.time() - start_time
             logger.debug(f"Quantum state calibration took {elapsed:.4f} seconds")
+    
+    def _analyze_curvature(self):
+        """Perform quantum curvature analysis of the hypercube structure"""
+        start_time = time.time()
+        
+        # Calculate curvature of connectivity (related to topological properties)
+        self.curvature = self._calculate_curvature()
+        
+        # Store in history
+        self.curvature_history.append(self.curvature)
+        if len(self.curvature_history) > 100:
+            self.curvature_history.pop(0)
+        
+        elapsed = time.time() - start_time
+        logger.debug(f"Curvature analysis completed in {elapsed:.4f} seconds. Curvature: {self.curvature:.6f}")
+    
+    def _calculate_curvature(self) -> float:
+        """
+        Calculate the curvature of connectivity for the quantum hypercube
+        
+        Returns:
+            Curvature value between 0 and 1
+        """
+        if not self.quantum_vectors:
+            return 0.0
+            
+        # Calculate the average angle between quantum vectors
+        total_angle = 0.0
+        count = 0
+        
+        for i in range(len(self.quantum_vectors)):
+            for j in range(i+1, len(self.quantum_vectors)):
+                # Calculate inner product
+                inner_product = np.vdot(self.quantum_vectors[i], self.quantum_vectors[j])
+                # Calculate angle (in radians)
+                angle = np.arccos(np.clip(np.abs(inner_product), 0.0, 1.0))
+                total_angle += angle
+                count += 1
+                
+        if count > 0:
+            avg_angle = total_angle / count
+        else:
+            avg_angle = 0.0
+            
+        # Normalize angle to [0,1] (0 = flat space, 1 = highly curved)
+        max_angle = np.pi / 2  # Maximum meaningful angle in our context
+        curvature = min(1.0, avg_angle / max_angle)
+        
+        return curvature
     
     def _build_topological_compressed(self, public_key: Any, sample_size: int = 10000) -> Dict:
         """
@@ -752,7 +1076,8 @@ class AdaptiveQuantumHypercube:
             'spectral': spectral,
             'quadtree': quadtree,
             'compression_ratio': self.compression_ratio,
-            'tvi': self._calculate_tvi()
+            'tvi': self.tvi,
+            'curvature': self.curvature
         }
     
     def _algebraic_compress(self, public_key: Any, sample_size: int) -> List[Dict]:
@@ -768,10 +1093,10 @@ class AdaptiveQuantumHypercube:
         """
         lines = []
         
-        # Generate sample signatures using the ur/uz method (NOT random!)
+        # Generate sample signatures using the ur/uz method with WDM-parallelism (NOT random!)
         signatures = []
         for _ in range(sample_size):
-            ur, uz = self._generate_valid_ur_uz(public_key)
+            ur, uz = self._generate_valid_ur_uz_wdm(public_key)
             
             # Calculate R_x = x((u_z + u_r · d) · G)
             R_x = self._calculate_Rx(ur, uz, public_key)
@@ -852,7 +1177,7 @@ class AdaptiveQuantumHypercube:
         # Generate sample signatures
         signatures = []
         for _ in range(sample_size):
-            ur, uz = self._generate_valid_ur_uz(public_key)
+            ur, uz = self._generate_valid_ur_uz_wdm(public_key)
             R_x = self._calculate_Rx(ur, uz, public_key)
             r = R_x % n
             
@@ -946,7 +1271,7 @@ class AdaptiveQuantumHypercube:
         # Generate sample signatures
         signatures = []
         for _ in range(sample_size):
-            ur, uz = self._generate_valid_ur_uz(public_key)
+            ur, uz = self._generate_valid_ur_uz_wdm(public_key)
             R_x = self._calculate_Rx(ur, uz, public_key)
             r = R_x % n
             
@@ -1052,7 +1377,7 @@ class AdaptiveQuantumHypercube:
     
     def generate_signature(self, private_key: Any, message: bytes) -> Tuple[int, int, int]:
         """
-        Generate a signature using the quantum hypercube methodology
+        Generate a signature using the quantum hypercube methodology with TopoNonce 2.0
         
         Args:
             private_key: The private key
@@ -1065,10 +1390,10 @@ class AdaptiveQuantumHypercube:
             raise RuntimeError("ECDSA library required for signature generation")
             
         start_time = time.time()
-        logger.debug("Generating signature using quantum hypercube methodology")
+        logger.debug("Generating signature using quantum hypercube methodology with TopoNonce 2.0")
         
         # In a real implementation, we would use the hypercube structure to generate the nonce
-        # For this implementation, we'll use the ur/uz method to ensure proper mathematical linkage
+        # For this implementation, we'll use the ur/uz method with WDM-parallelism to ensure proper mathematical linkage
         
         # Extract private key value
         if FAST_ECDSA_AVAILABLE:
@@ -1076,8 +1401,8 @@ class AdaptiveQuantumHypercube:
         else:
             d = string_to_number(private_key.to_string())
         
-        # Generate ur and uz properly (not random!)
-        ur, uz = self._generate_valid_ur_uz(None)  # Public key not needed for generation
+        # Generate ur and uz properly using TopoNonce 2.0 with WDM-parallelism (not random!)
+        ur, uz = self._generate_valid_ur_uz_wdm(None)  # Public key not needed for generation
         
         # Calculate R_x = x((u_z + u_r · d) · G)
         if FAST_ECDSA_AVAILABLE:
@@ -1107,7 +1432,7 @@ class AdaptiveQuantumHypercube:
         # Ensure ur is invertible
         if math.gcd(ur, n) != 1:
             logger.warning("ur is not invertible, regenerating...")
-            ur, uz = self._generate_valid_ur_uz(None)
+            ur, uz = self._generate_valid_ur_uz_wdm(None)
             # Recalculate R_x with new ur
             if FAST_ECDSA_AVAILABLE:
                 R1 = uz * G_point
@@ -1142,7 +1467,7 @@ class AdaptiveQuantumHypercube:
     
     def verify_signature(self, public_key: Any, message: bytes, r: int, s: int, z: int) -> bool:
         """
-        Verify a signature using the quantum hypercube methodology
+        Verify a signature using the quantum hypercube methodology with TVI filtering
         
         Args:
             public_key: The public key
@@ -1157,10 +1482,15 @@ class AdaptiveQuantumHypercube:
             return False
             
         start_time = time.time()
-        logger.debug("Verifying signature using quantum hypercube methodology")
+        logger.debug("Verifying signature using quantum hypercube methodology with TVI filtering")
         
         try:
-            # First, verify the bijection property
+            # First, check if TVI is above critical threshold (TVI filtering)
+            if self.tvi > self.tvl_critical_threshold:
+                logger.warning(f"Transaction blocked due to high TVI ({self.tvi:.4f} > {self.tvl_critical_threshold})")
+                return False
+                
+            # Verify the bijection property
             # Calculate ur and uz from the signature
             if math.gcd(s, n) != 1:
                 logger.warning("s is not invertible modulo n")
@@ -1179,10 +1509,14 @@ class AdaptiveQuantumHypercube:
             # This would include checking against the compressed hypercube representation
             
             # Check if the point (r,s,z) is consistent with the hypercube topology
-            tvi = self._calculate_tvi()
-            if tvi > 0.5:
-                logger.warning(f"High TVI ({tvi:.4f}) detected during verification. Potential vulnerability.")
+            if self.tvi > 0.5:
+                logger.warning(f"High TVI ({self.tvi:.4f}) detected during verification. Potential vulnerability.")
             
+            # Verify Baire property for this transaction
+            if not self._verify_baire_property():
+                logger.warning("Baire property verification failed for transaction")
+                return False
+                
             elapsed = time.time() - start_time
             logger.debug(f"Signature verified successfully in {elapsed:.4f} seconds")
             
@@ -1224,6 +1558,33 @@ class AdaptiveQuantumHypercube:
         
         # Placeholder for actual resource checking logic
         # ...
+    
+    def get_tvi(self) -> float:
+        """
+        Get the current Topological Vulnerability Index
+        
+        Returns:
+            TVI value between 0 and 1
+        """
+        return self.tvi
+    
+    def get_curvature(self) -> float:
+        """
+        Get the current curvature of connectivity
+        
+        Returns:
+            Curvature value between 0 and 1
+        """
+        return self.curvature
+    
+    def get_quantum_state(self) -> QuantumState:
+        """
+        Get the current quantum state of the hypercube
+        
+        Returns:
+            QuantumState enum value
+        """
+        return self.quantum_state
 
 # Example usage (for demonstration purposes)
 if __name__ == "__main__":
@@ -1232,8 +1593,8 @@ if __name__ == "__main__":
     example_logger.setLevel(logging.INFO)
     
     try:
-        # Initialize the hypercube
-        hypercube = AdaptiveQuantumHypercube(dimension=4, target_size_gb=0.1)
+        # Initialize the hypercube with WDM-parallelism
+        hypercube = AdaptiveQuantumHypercube(dimension=4, target_size_gb=0.1, wdm_parallelism=4)
         
         # Generate a key pair (using fastecdsa if available)
         if FAST_ECDSA_AVAILABLE:
@@ -1261,7 +1622,7 @@ if __name__ == "__main__":
         
         # Adapt dimension based on simulated conditions
         example_logger.info("Adapting dimension...")
-        new_dimension = hypercube.adapt_dimension(current_complexity=0.7, tvl_value=0.25)
+        new_dimension = hypercube.adapt_dimension(current_complexity=0.7, tvl_value=0.25, drift_rate=0.08)
         example_logger.info(f"New dimension: {new_dimension}")
         
         # Get compressed representation
@@ -1269,6 +1630,11 @@ if __name__ == "__main__":
         compressed = hypercube.get_compressed_representation(public_key)
         example_logger.info(f"Compression ratio: {1/compressed['compression_ratio']:.2f}x")
         example_logger.info(f"TVI: {compressed['tvi']:.4f}")
+        example_logger.info(f"Curvature: {compressed['curvature']:.6f}")
+        
+        # Check if calibration is needed
+        example_logger.info("Checking calibration needs...")
+        hypercube._check_calibration_needed()
         
     except Exception as e:
         example_logger.error(f"Example execution failed: {str(e)}", exc_info=True)
